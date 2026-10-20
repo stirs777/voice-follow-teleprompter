@@ -7,6 +7,8 @@ read, rather than at a fixed speed you have to match.
 
 **Live:** https://stirs777.github.io/voice-follow-teleprompter/
 
+You will need to click the Find Me button a couple of times and grant Chrome microphone access.  
+
 ## How the tracking works
 
 It anchors on the most recent word it heard, finds that word in the script
