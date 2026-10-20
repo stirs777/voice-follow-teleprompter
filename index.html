@@ -1,0 +1,940 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Voice-Follow Teleprompter</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a full-bleed reading stage with a fixed reading line at 38% height,
+   a slim instrument bar pinned to the bottom, and panels that slide up over it.
+   Deliberately single-theme dark: this is used in a dim room, aimed at a camera. */
+:root{
+  --ink:#f2efe8;          /* upcoming text — warm paper white */
+  --ink-spoken:#4c5560;   /* already spoken — cool, recedes */
+  --ink-dim:#8b949e;      /* labels, secondary */
+  --stage:#0b0d10;        /* near-black, slight blue bias */
+  --panel:#15181d;
+  --panel-2:#1e2228;
+  --edge:#2b3038;
+  --amber:#e8a33d;        /* reading line + current word: studio safelight */
+  --amber-soft:rgba(232,163,61,.14);
+  --live:#5fd08a;
+  --warn:#e2715a;
+  --prompt-face:'Libre Franklin',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --ui-face:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--stage);color:var(--ink);
+  font-family:var(--ui-face);overscroll-behavior:none}
+
+/* ---------- reading stage ---------- */
+#stage{position:fixed;inset:0;overflow:hidden;touch-action:none}
+/* #veil carries the band mask in untransformed coordinates, so mirroring
+   #stage cannot drag the fade out of place. */
+#veil{position:absolute;inset:0}
+#stage.mirror-x{transform:scaleX(-1)}
+#stage.mirror-y{transform:scaleY(-1)}
+#stage.mirror-x.mirror-y{transform:scale(-1,-1)}
+#script{position:absolute;left:0;right:0;top:0;will-change:transform;
+  font-family:var(--prompt-face);font-weight:400;
+  padding-left:max(18px,env(safe-area-inset-left,0px));
+  padding-right:max(18px,env(safe-area-inset-right,0px));
+  margin-inline:auto;text-wrap:pretty}
+#script .w{color:var(--ink);transition:color .18s linear}
+#script .w.spoken{color:var(--ink-spoken)}
+#script .w.cur{color:#fff;background:var(--amber-soft);
+  box-shadow:inset 0 -.14em 0 var(--amber);border-radius:.08em}
+#script p{margin:0 0 .85em}
+#script .cue{font-family:var(--ui-face);font-size:.5em;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--amber);opacity:.75;display:block;margin:.8em 0 .3em}
+
+/* reading line — ticks at the margins, nothing across the text */
+#line{position:fixed;left:0;right:0;height:0;pointer-events:none;z-index:4}
+#line::before,#line::after{content:"";position:absolute;top:-1px;height:2px;width:26px;
+  background:var(--amber);opacity:.85}
+#line::before{left:0}
+#line::after{right:0}
+#line span{position:absolute;left:26px;right:26px;top:0;height:1px;
+  background:linear-gradient(90deg,var(--amber),transparent 18%,transparent 82%,var(--amber));opacity:.22}
+
+/* ---------- status strip ---------- */
+#status{position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;z-index:6;
+  display:flex;align-items:center;gap:10px;font-size:11px;letter-spacing:.06em;
+  padding:8px max(14px,env(safe-area-inset-left,0px));
+  background:linear-gradient(180deg,rgba(11,13,16,.92),rgba(11,13,16,0));
+  color:var(--ink-dim);transition:opacity .25s}
+#dot{width:9px;height:9px;border-radius:50%;background:var(--ink-spoken);flex:none}
+#dot.on{background:var(--live);box-shadow:0 0 0 0 rgba(95,208,138,.5);animation:pulse 1.8s infinite}
+#dot.err{background:var(--warn)}
+@keyframes pulse{70%{box-shadow:0 0 0 9px rgba(95,208,138,0)}100%{box-shadow:0 0 0 0 rgba(95,208,138,0)}}
+#heard{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  direction:rtl;text-align:left;opacity:.8}
+#pct{font-variant-numeric:tabular-nums;flex:none}
+
+/* ---------- instrument bar ---------- */
+#bar{position:fixed;bottom:0;left:0;right:0;z-index:7;display:flex;gap:6px;
+  padding:8px max(12px,env(safe-area-inset-left,0px));
+  padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));
+  background:rgba(21,24,29,.94);backdrop-filter:blur(8px);
+  border-top:1px solid var(--edge);transition:transform .28s ease,opacity .28s}
+#bar.hidden{transform:translateY(120%);opacity:0;pointer-events:none}
+@media (min-width:900px){
+  /* on a laptop a full-width bar is a mile of dead space */
+  #bar{left:50%;right:auto;transform:translateX(-50%);width:760px;
+       border:1px solid var(--edge);border-bottom:0;border-radius:12px 12px 0 0}
+  #bar.hidden{transform:translate(-50%,120%)}
+}
+button{font-family:var(--ui-face);font-size:11px;letter-spacing:.06em;color:var(--ink);
+  background:var(--panel-2);border:1px solid var(--edge);border-radius:9px;
+  padding:11px 9px;min-height:46px;cursor:pointer;flex:1;transition:background .15s,border-color .15s}
+button:active{background:#2a3038}
+button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button.wide{flex:1.5}
+button.primary{background:var(--amber);border-color:var(--amber);color:#1a1205;font-weight:600}
+button.primary.live{background:var(--live);border-color:var(--live);color:#06240f}
+button[aria-pressed="true"]{border-color:var(--amber);color:var(--amber)}
+
+/* ---------- panels ---------- */
+.panel{position:fixed;inset:env(safe-area-inset-top,0px) 0 0 0;z-index:9;background:var(--panel);
+  display:flex;flex-direction:column;transform:translateY(100%);transition:transform .3s ease}
+.panel.open{transform:none}
+.panel header{display:flex;align-items:center;gap:10px;padding:14px max(16px,env(safe-area-inset-left,0px));
+  border-bottom:1px solid var(--edge)}
+.panel h2{margin:0;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);flex:1}
+.panel .body{flex:1;overflow-y:auto;padding:16px max(16px,env(safe-area-inset-left,0px));
+  padding-bottom:calc(28px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:18px}
+.panel header button{flex:none;min-width:86px}
+label.row{display:flex;flex-direction:column;gap:7px;font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-dim)}
+label.row .val{color:var(--amber);font-variant-numeric:tabular-nums}
+.rowhead{display:flex;justify-content:space-between;align-items:baseline}
+input[type=range]{width:100%;accent-color:var(--amber);height:34px}
+textarea,input[type=text],select{width:100%;font-family:var(--prompt-face);font-size:16px;
+  color:var(--ink);background:var(--panel-2);border:1px solid var(--edge);border-radius:9px;padding:12px}
+textarea{min-height:46vh;line-height:1.55;resize:vertical}
+select,input[type=text]{font-family:var(--ui-face);font-size:13px}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap}
+.btnrow button{flex:1 1 44%}
+.note{font-size:11.5px;line-height:1.65;color:var(--ink-dim);letter-spacing:.02em}
+.note b{color:var(--ink)}
+.note code{color:var(--amber);font-size:11px}
+hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
+.danger{color:var(--warn);border-color:var(--warn)}
+#toast{position:fixed;left:50%;bottom:calc(74px + env(safe-area-inset-bottom,0px));
+  transform:translate(-50%,14px);z-index:12;background:var(--panel-2);border:1px solid var(--edge);
+  border-radius:10px;padding:10px 16px;font-size:12px;letter-spacing:.05em;
+  opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;max-width:86vw;text-align:center}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#confirm{position:fixed;inset:0;z-index:14;background:rgba(5,7,9,.82);display:none;
+  align-items:center;justify-content:center;padding:24px}
+#confirm.open{display:flex}
+#confirm .box{background:var(--panel);border:1px solid var(--edge);border-radius:14px;
+  padding:20px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:14px}
+#confirm p{margin:0;font-size:13px;line-height:1.6;color:var(--ink)}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="veil"><div id="script" aria-live="off"></div></div>
+</div>
+<div id="line"><span></span></div>
+
+<div id="status">
+  <i id="dot"></i>
+  <span id="state">Idle</span>
+  <span id="heard"></span>
+  <span id="pct">0%</span>
+</div>
+
+<div id="bar">
+  <button id="bMic" class="primary wide">Listen</button>
+  <button id="bFind">Find me</button>
+  <button id="bBack">&#8593; Back</button>
+  <button id="bFwd">&#8595; Fwd</button>
+  <button id="bScript">Script</button>
+  <button id="bSet">Setup</button>
+</div>
+
+<!-- ============ SCRIPT PANEL ============ -->
+<section class="panel" id="pScript" aria-hidden="true">
+  <header>
+    <h2>Script</h2>
+    <button data-close="pScript">Done</button>
+  </header>
+  <div class="body">
+    <label class="row">Saved scripts
+      <select id="slot"><option value="">— new / unsaved —</option></select>
+    </label>
+    <div class="btnrow">
+      <button id="bLoad">Load</button>
+      <button id="bSave">Save as…</button>
+      <button id="bUpdate">Update saved</button>
+      <button id="bDelete" class="danger">Delete saved</button>
+    </div>
+    <hr>
+    <label class="row">Script text
+      <textarea id="text" spellcheck="false" placeholder="Paste your script here."></textarea>
+    </label>
+    <div class="btnrow">
+      <button id="bApply" class="primary">Load into prompter</button>
+      <button id="bPaste">Paste from clipboard</button>
+      <button id="bFile">Open a .txt / .md file</button>
+      <input type="file" id="file" accept=".txt,.md,.markdown,text/plain" hidden>
+    </div>
+    <p class="note"><b>Formatting:</b> a blank line starts a new paragraph. A line
+    beginning with <code>//</code> becomes a dim stage cue — it is displayed but skipped
+    by the voice tracker, so you can write <code>// pause, look at camera</code> without
+    the prompter waiting to hear it.</p>
+  </div>
+</section>
+
+<!-- ============ SETUP PANEL ============ -->
+<section class="panel" id="pSet" aria-hidden="true">
+  <header>
+    <h2>Setup</h2>
+    <button data-close="pSet">Done</button>
+  </header>
+  <div class="body">
+    <label class="row">Framing preset</label>
+    <div class="btnrow">
+      <button id="bPreTab">Tablet &mdash; full screen</button>
+      <button id="bPreCam">Laptop &mdash; under the webcam</button>
+    </div>
+    <p class="note">The laptop preset pulls the text into a narrow column high on
+    the screen and shows only a few lines at a time, so your eyes stay close to
+    the lens instead of travelling down the display.</p>
+    <hr>
+    <label class="row"><span class="rowhead">Lines visible <span class="val" id="vBand"></span></span>
+      <input type="range" id="band" min="0" max="14" step="1">
+      <span class="note">Everything outside the band fades out. Set it to 0 to
+      show the whole page.</span></label>
+    <label class="row"><span class="rowhead">Text size <span class="val" id="vSize"></span></span>
+      <input type="range" id="size" min="20" max="110" step="1"></label>
+    <label class="row"><span class="rowhead">Line spacing <span class="val" id="vLead"></span></span>
+      <input type="range" id="lead" min="1.1" max="2.2" step="0.05"></label>
+    <label class="row"><span class="rowhead">Text width <span class="val" id="vWidth"></span></span>
+      <input type="range" id="width" min="22" max="100" step="1"></label>
+    <label class="row"><span class="rowhead">Reading line height <span class="val" id="vLineY"></span></span>
+      <input type="range" id="lineY" min="6" max="70" step="1"></label>
+    <hr>
+    <div class="btnrow">
+      <button id="bMirrorX" aria-pressed="false">Mirror &#8596;</button>
+      <button id="bMirrorY" aria-pressed="false">Flip &#8597;</button>
+      <button id="bFull">Fullscreen</button>
+      <button id="bKeep" aria-pressed="false">Keep screen on</button>
+    </div>
+    <hr>
+    <label class="row">Recognition language
+      <select id="lang">
+        <option value="en-US">English (US)</option>
+        <option value="en-GB">English (UK)</option>
+        <option value="es-ES">Spanish</option>
+        <option value="fr-FR">French</option>
+        <option value="de-DE">German</option>
+      </select></label>
+    <label class="row"><span class="rowhead">Tracking sensitivity <span class="val" id="vSens"></span></span>
+      <input type="range" id="sens" min="1" max="5" step="1">
+      <span class="note">Lower holds position until it is sure. Higher follows faster but
+      may jump on repeated words.</span></label>
+    <hr>
+    <label class="row"><span class="rowhead">Fallback scroll speed <span class="val" id="vSpeed"></span></span>
+      <input type="range" id="speed" min="0" max="60" step="1"></label>
+    <div class="btnrow">
+      <button id="bRoll" class="wide">Start timed roll</button>
+    </div>
+    <p class="note">Use the timed roll if speech recognition is unavailable or you are
+    reading something the tracker struggles with. It scrolls at a constant rate and
+    ignores the microphone.</p>
+    <hr>
+    <p class="note"><b>Bluetooth remote / foot pedal:</b> most page-turners send arrow or
+    space keys. <code>Space</code> listen on/off · <code>&#8595;</code> forward a line ·
+    <code>&#8593;</code> back a line · <code>M</code> mirror · <code>F</code> fullscreen ·
+    <code>Esc</code> show the bar.</p>
+    <p class="note" id="diag"></p>
+  </div>
+</section>
+
+<div id="toast"></div>
+<div id="confirm"><div class="box">
+  <p id="cMsg"></p>
+  <div class="btnrow"><button id="cNo">Cancel</button><button id="cYes" class="danger">Delete</button></div>
+</div></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ *  State
+ * ------------------------------------------------------------------ */
+var SAMPLE =
+"// SAMPLE - this paragraph is here so you can test the tracking.\n" +
+"// Replace it with your own script from the Script panel.\n" +
+"Read this at your normal speaking pace and watch what happens to the words\n" +
+"behind you. They should dim as you pass them, and the line you are reading\n" +
+"should stay level with the two amber marks at the edges of the screen.\n" +
+"\n" +
+"Now stop reading and say something that is not written here at all. Talk\n" +
+"about the weather for a moment. The page should sit perfectly still and wait\n" +
+"for you, because it cannot find what you are saying anywhere in the script.\n" +
+"\n" +
+"// pause here, then start reading again\n" +
+"When you come back to the written words, it should pick you up again within\n" +
+"two or three of them. If it does not, tap the button marked Find me, or\n" +
+"simply tap the word you want to start from. That is everything you need to\n" +
+"know. The rest is under Setup.";
+
+var S = {                        // persisted settings
+  size:52, lead:1.45, width:76, lineY:38, sens:3, speed:18, band:0,
+  mirrorX:false, mirrorY:false, lang:"en-US", keep:false, text:SAMPLE, slot:""
+};
+var toks = [];                   // [{norm, el, cue}]
+var cursor = 0;                  // index of the next word expected
+var lastPainted = -1;
+var offset = 0, target = 0;      // scroll in px (translate on #script)
+var measured = false;
+var listening = false, rolling = false;
+var rec = null, recAlive = false, restartTimer = null;
+var heardFinal = [], heardInterim = [];
+var lastMatchAt = 0, lostShown = false;
+var wakeLock = null;
+var barTimer = null;
+
+var $ = function(id){ return document.getElementById(id); };
+var stage=$("stage"), veil=$("veil"), scriptEl=$("script"), lineEl=$("line");
+
+/* ------------------------------------------------------------------ *
+ *  Settings persistence (per-device convenience only)
+ * ------------------------------------------------------------------ */
+function loadSettings(){
+  try{
+    var raw = localStorage.getItem("vftp.settings");
+    if(raw){ var o=JSON.parse(raw); for(var k in S) if(k in o) S[k]=o[k]; }
+  }catch(e){}
+}
+function saveSettings(){
+  try{ localStorage.setItem("vftp.settings", JSON.stringify(S)); }catch(e){}
+}
+function scripts(){
+  try{ return JSON.parse(localStorage.getItem("vftp.scripts")||"{}"); }catch(e){ return {}; }
+}
+function setScripts(o){
+  try{ localStorage.setItem("vftp.scripts", JSON.stringify(o)); return true; }
+  catch(e){ toast("Could not save — device storage is full or blocked."); return false; }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Build the prompter from raw text
+ * ------------------------------------------------------------------ */
+var STOP = {the:1,a:1,an:1,and:1,of:1,to:1,in:1,is:1,it:1,that:1,for:1,on:1,as:1,
+            was:1,be:1,but:1,or:1,so:1,he:1,i:1,you:1,we:1,they:1,this:1,with:1,at:1};
+
+function norm(w){
+  return w.toLowerCase().replace(/[‘’]/g,"'").replace(/[^a-z0-9']/g,"");
+}
+
+function build(raw){
+  scriptEl.textContent = "";
+  toks = []; cursor = 0; lastPainted = -1; offset = target = 0;
+  var blocks = String(raw||"").replace(/\r/g,"").split(/\n\s*\n/);
+  var frag = document.createDocumentFragment();
+
+  blocks.forEach(function(block){
+    var lines = block.split("\n");
+    var p = document.createElement("p");
+    lines.forEach(function(line){
+      var cue = /^\s*\/\//.test(line);
+      var body = cue ? line.replace(/^\s*\/\/\s?/,"") : line;
+      var words = body.split(/\s+/).filter(Boolean);
+      if(!words.length) return;
+      var host = p;
+      if(cue){
+        var c = document.createElement("span");
+        c.className = "cue"; c.textContent = body;
+        p.appendChild(c);
+        // cue words are placed in the token list but flagged so tracking skips them
+        words.forEach(function(w){ toks.push({norm:norm(w), el:c, cue:true}); });
+        return;
+      }
+      words.forEach(function(w,i){
+        var s = document.createElement("span");
+        s.className = "w";
+        s.textContent = (i ? " " : "") + w;
+        s.dataset.i = toks.length;
+        host.appendChild(s);
+        toks.push({norm:norm(w), el:s, cue:false});
+      });
+      host.appendChild(document.createTextNode(" "));
+    });
+    if(p.childNodes.length) frag.appendChild(p);
+  });
+
+  scriptEl.appendChild(frag);
+  measured = false;
+  cursor = firstReal(0);
+  paint(); layout(); jumpToCursor(true);
+  $("pct").textContent = "0%";
+}
+
+function firstReal(from){
+  for(var i=Math.max(0,from); i<toks.length; i++) if(!toks[i].cue && toks[i].norm) return i;
+  return toks.length;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Painting spoken / current
+ * ------------------------------------------------------------------ */
+function paint(){
+  if(lastPainted === cursor) return;
+  var lo = Math.min(lastPainted < 0 ? 0 : lastPainted, cursor);
+  var hi = Math.max(lastPainted < 0 ? toks.length-1 : lastPainted, cursor);
+  for(var i=lo; i<=hi && i<toks.length; i++){
+    var t = toks[i];
+    if(t.cue) continue;
+    var c = t.el.classList;
+    if(i < cursor){ c.add("spoken"); c.remove("cur"); }
+    else if(i === cursor){ c.remove("spoken"); c.add("cur"); }
+    else { c.remove("spoken"); c.remove("cur"); }
+  }
+  lastPainted = cursor;
+  var pct = toks.length ? Math.round(cursor / toks.length * 100) : 0;
+  $("pct").textContent = Math.min(100,pct) + "%";
+}
+
+/* ------------------------------------------------------------------ *
+ *  Layout + scrolling
+ * ------------------------------------------------------------------ */
+function layout(){
+  scriptEl.style.fontSize = S.size + "px";
+  scriptEl.style.lineHeight = String(S.lead);
+  scriptEl.style.maxWidth = S.width + "%";
+  var y = window.innerHeight * (S.lineY/100);
+  lineEl.style.top = y + "px";
+  // keep the marks beside the text, not out at the screen edges, so a narrow
+  // column does not drag the eye wide
+  var inset = Math.max(0, (100 - S.width) / 2);
+  lineEl.style.left = inset + "%";
+  lineEl.style.right = inset + "%";
+  // generous pads so the first and last lines can both reach the reading line
+  scriptEl.style.paddingTop = y + "px";
+  scriptEl.style.paddingBottom = (window.innerHeight - y) + "px";
+  stage.classList.toggle("mirror-x", !!S.mirrorX);
+  stage.classList.toggle("mirror-y", !!S.mirrorY);
+  bandMask(y);
+  measured = false;
+}
+
+/* Fade everything outside a band of N lines. The band sits mostly below the
+   reading line, because that is where the words you have not said yet are. */
+function bandMask(y){
+  var n = Math.round(S.band);
+  if(!n){ veil.style.webkitMaskImage = "none"; veil.style.maskImage = "none"; return; }
+  var lh = S.size * S.lead;
+  var top = Math.max(0, y - lh * 0.95);
+  var bot = y + lh * (n - 1) + lh * 0.55;
+  var fade = Math.max(14, lh * 0.7);
+  var g = "linear-gradient(to bottom,"
+        + "transparent " + Math.max(0, top - fade).toFixed(0) + "px,"
+        + "#000 " + top.toFixed(0) + "px,"
+        + "#000 " + bot.toFixed(0) + "px,"
+        + "transparent " + (bot + fade).toFixed(0) + "px)";
+  veil.style.webkitMaskImage = g;
+  veil.style.maskImage = g;
+}
+
+function cursorY(){
+  var t = toks[cursor] || toks[toks.length-1];
+  if(!t) return 0;
+  var el = t.el;
+  return el.offsetTop + el.offsetHeight/2;
+}
+
+function jumpToCursor(hard){
+  target = cursorY() - window.innerHeight * (S.lineY/100);
+  if(hard){ offset = target; apply(); }
+}
+
+function apply(){
+  scriptEl.style.transform = "translate3d(0," + (-offset).toFixed(1) + "px,0)";
+}
+
+function frame(){
+  if(rolling){
+    target += S.speed / 60;                        // px per frame at ~60fps
+  }
+  var d = target - offset;
+  if(Math.abs(d) > 0.3){
+    offset += d * 0.11;                            // eased follow, never a snap
+    apply();
+  }
+  if(listening && !rolling && lastMatchAt && Date.now() - lastMatchAt > 7000 && !lostShown){
+    lostShown = true;
+    setState("Waiting — keep reading, or tap Find me");
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Word matching
+ * ------------------------------------------------------------------ */
+function near(a,b){                                // tolerant word equality
+  if(!a || !b) return false;
+  if(a === b) return true;
+  var la=a.length, lb=b.length;
+  if(Math.abs(la-lb) > 2) return false;
+  if(la>=5 && lb>=5 && a.slice(0,4) === b.slice(0,4)) return true;   // shared stem
+  if(la<4 || lb<4) return false;
+  // bounded edit distance <= 1
+  var i=0,j=0,edits=0;
+  while(i<la && j<lb){
+    if(a[i]===b[j]){ i++; j++; continue; }
+    if(++edits > 1) return false;
+    if(la>lb) i++; else if(lb>la) j++; else { i++; j++; }
+  }
+  if(la-i + (lb-j) > 1) edits++;
+  return edits <= 1;
+}
+
+/* Anchor on the most recent heard word, then verify backwards against the
+   script. Returns {pos, score} where pos is the script index that word
+   landed on. Score counts supporting words, with a mild preference for
+   staying near the current cursor and for moving forward rather than back. */
+function bestPos(tail, lo, hi){
+  var best = {pos:-1, score:-1};
+  if(!tail.length) return best;
+  var last = tail[tail.length-1];
+  for(var p=lo; p<=hi; p++){
+    var t = toks[p];
+    if(!t || t.cue || !t.norm) continue;
+    if(!near(last, t.norm)) continue;
+    var score = STOP[last] ? 0.45 : 1;             // a stopword alone proves little
+    var i = tail.length-2, j = p-1, slack = 2, depth = 0;
+    while(i>=0 && j>=0 && slack>=0 && depth<5){
+      var tj = toks[j];
+      if(tj.cue || !tj.norm){ j--; continue; }     // cues are invisible to tracking
+      if(near(tail[i], tj.norm)){
+        score += STOP[tail[i]] ? 0.4 : 1;
+        i--; j--; depth++;
+      } else if(j-1 >= 0 && toks[j-1] && !toks[j-1].cue && near(tail[i], toks[j-1].norm)){
+        score += 0.7; i--; j -= 2; depth++;        // one word was dropped by the mic
+      } else {
+        slack--; i--; j--; depth++;
+      }
+    }
+    score -= Math.abs(p - cursor) * 0.012;
+    if(p < cursor) score -= 0.9;                   // re-reading is possible but rarer
+    if(score > best.score) best = {pos:p, score:score};
+  }
+  return best;
+}
+
+function sensThreshold(){
+  // sens 1 (cautious) .. 5 (eager)
+  return [0,2.7,2.2,1.8,1.5,1.2][S.sens] || 1.8;
+}
+
+function track(){
+  if(!listening || rolling || !toks.length) return;
+  var tail = heardFinal.concat(heardInterim).slice(-6);
+  if(!tail.length) return;
+  var lo = Math.max(0, cursor - 12);
+  var hi = Math.min(toks.length-1, cursor + 70);
+  var b = bestPos(tail, lo, hi);
+  if(b.pos < 0 || b.score < sensThreshold()) return;
+  if(b.pos < cursor && b.score < 2.5) return;      // going back needs several matching words
+  cursor = firstReal(b.pos + 1);
+  lastMatchAt = Date.now(); lostShown = false;
+  setState("Following");
+  paint(); jumpToCursor(false);
+}
+
+function findMe(){                                 // search the whole script
+  var tail = heardFinal.concat(heardInterim).slice(-6);
+  if(tail.length < 2){ toast("Say a few words from the script first."); return; }
+  var save = cursor; cursor = -1;                  // neutralise the proximity bias
+  var b = bestPos(tail, 0, toks.length-1);
+  cursor = save;
+  if(b.pos < 0 || b.score < 1.6){ toast("Could not place that phrase."); return; }
+  cursor = firstReal(b.pos + 1);
+  lastMatchAt = Date.now(); lostShown = false;
+  paint(); jumpToCursor(true);
+  toast("Found it.");
+}
+
+/* ------------------------------------------------------------------ *
+ *  Speech recognition
+ * ------------------------------------------------------------------ */
+var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+function startListening(){
+  if(!SR){
+    toast("This browser has no speech recognition. Use the timed roll instead.");
+    return;
+  }
+  rolling = false;
+  listening = true;
+  lastMatchAt = Date.now(); lostShown = false;
+  heardFinal = []; heardInterim = [];
+  reflectMic();
+  spin();
+}
+
+function spin(){
+  if(!listening) return;
+  try{
+    rec = new SR();
+  }catch(e){
+    setState("Recognition unavailable"); listening=false; reflectMic(); return;
+  }
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = S.lang;
+  rec.maxAlternatives = 1;
+
+  rec.onstart = function(){ recAlive = true; setState("Listening"); dot("on"); };
+  rec.onresult = function(ev){
+    var interim = [];
+    for(var i=ev.resultIndex; i<ev.results.length; i++){
+      var r = ev.results[i];
+      var words = String(r[0].transcript).split(/\s+/).map(norm).filter(Boolean);
+      if(r.isFinal){
+        heardFinal = heardFinal.concat(words).slice(-60);
+      } else {
+        interim = interim.concat(words);
+      }
+    }
+    heardInterim = interim;
+    var show = heardFinal.concat(heardInterim).slice(-9).join(" ");
+    $("heard").textContent = show;
+    track();
+  };
+  rec.onerror = function(ev){
+    var e = ev.error;
+    if(e === "not-allowed" || e === "service-not-allowed"){
+      listening = false; dot("err");
+      setState("Microphone blocked");
+      toast("Microphone denied. This page must be served over https, and the site needs mic permission.");
+    } else if(e === "audio-capture"){
+      listening = false; dot("err"); setState("No microphone found");
+    } else if(e === "network"){
+      dot("err"); setState("Recognition offline — retrying");
+    }
+    // 'no-speech' and 'aborted' are normal; onend restarts us
+  };
+  rec.onend = function(){
+    recAlive = false;
+    if(listening){
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(spin, 300);        // Android ends the stream often
+    } else {
+      dot(""); setState("Idle");
+    }
+    reflectMic();
+  };
+
+  try{ rec.start(); }
+  catch(e){ clearTimeout(restartTimer); restartTimer = setTimeout(spin, 500); }
+}
+
+function stopListening(){
+  listening = false;
+  clearTimeout(restartTimer);
+  if(rec){ try{ rec.stop(); }catch(e){} try{ rec.abort(); }catch(e){} }
+  dot(""); setState("Idle"); reflectMic();
+}
+
+function dot(cls){ $("dot").className = cls; }
+function setState(s){ $("state").textContent = s; }
+function reflectMic(){
+  var b = $("bMic");
+  b.textContent = listening ? "Stop" : "Listen";
+  b.classList.toggle("live", listening);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Screen wake lock
+ * ------------------------------------------------------------------ */
+function keepAwake(on){
+  S.keep = on; saveSettings();
+  $("bKeep").setAttribute("aria-pressed", on ? "true" : "false");
+  if(!on){
+    if(wakeLock){ try{ wakeLock.release(); }catch(e){} wakeLock = null; }
+    return;
+  }
+  if(!navigator.wakeLock){ toast("This browser cannot hold the screen on."); return; }
+  navigator.wakeLock.request("screen").then(function(l){
+    wakeLock = l;
+    l.addEventListener("release", function(){ wakeLock = null; });
+  }).catch(function(){ toast("Screen lock refused — set the display timeout in Android settings."); });
+}
+document.addEventListener("visibilitychange", function(){
+  if(document.visibilityState === "visible" && S.keep && !wakeLock) keepAwake(true);
+});
+
+/* ------------------------------------------------------------------ *
+ *  UI plumbing
+ * ------------------------------------------------------------------ */
+function toast(msg){
+  var t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(function(){ t.classList.remove("show"); }, 3200);
+}
+function openPanel(id){
+  var p = $(id); p.classList.add("open"); p.setAttribute("aria-hidden","false");
+  showBar(true);
+}
+function closePanel(id){
+  var p = $(id); p.classList.remove("open"); p.setAttribute("aria-hidden","true");
+}
+function showBar(persist){
+  $("bar").classList.remove("hidden");
+  $("status").style.opacity = "1";
+  clearTimeout(barTimer);
+  if(!persist) barTimer = setTimeout(function(){
+    $("bar").classList.add("hidden");
+    $("status").style.opacity = ".35";
+  }, 4500);
+}
+
+function ask(msg, yes){
+  $("cMsg").textContent = msg;
+  $("confirm").classList.add("open");
+  $("cYes").onclick = function(){ $("confirm").classList.remove("open"); yes(); };
+  $("cNo").onclick  = function(){ $("confirm").classList.remove("open"); };
+}
+
+function nudge(dir){
+  // move roughly one line: step until the vertical position changes
+  var start = cursorY(), guard = 0;
+  while(guard++ < 400){
+    var next = dir > 0 ? firstReal(cursor+1) : cursor-1;
+    if(next < 0 || next >= toks.length) break;
+    cursor = next;
+    if(toks[cursor] && !toks[cursor].cue && Math.abs(cursorY() - start) > 4) break;
+  }
+  if(cursor < 0) cursor = 0;
+  paint(); jumpToCursor(true);
+}
+
+function refreshSlots(){
+  var sel = $("slot"), all = scripts(), names = Object.keys(all).sort();
+  sel.textContent = "";
+  var o0 = document.createElement("option");
+  o0.value = ""; o0.textContent = "— new / unsaved —"; sel.appendChild(o0);
+  names.forEach(function(n){
+    var o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o);
+  });
+  sel.value = (S.slot && all[S.slot]) ? S.slot : "";
+}
+
+function bindRange(id, key, fmt){
+  var el = $(id), out = $("v" + id.charAt(0).toUpperCase() + id.slice(1));
+  function show(){ if(out) out.textContent = fmt(S[key]); }
+  el.value = S[key]; show();
+  el.addEventListener("input", function(){
+    S[key] = parseFloat(el.value); show(); saveSettings();
+    layout(); jumpToCursor(true);
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ *  Wiring
+ * ------------------------------------------------------------------ */
+loadSettings();
+$("text").value = S.text;
+build(S.text);
+layout(); jumpToCursor(true);
+requestAnimationFrame(frame);
+
+bindRange("size","size",  function(v){ return v + "px"; });
+bindRange("lead","lead",  function(v){ return v.toFixed(2); });
+bindRange("width","width",function(v){ return v + "%"; });
+bindRange("lineY","lineY",function(v){ return v + "%"; });
+bindRange("sens","sens",  function(v){ return ["","cautious","steady","balanced","quick","eager"][v]; });
+bindRange("speed","speed",function(v){ return v + " px/s"; });
+bindRange("band","band",  function(v){ return v ? v + " lines" : "all"; });
+
+function applyPreset(p){
+  for(var k in p) S[k] = p[k];
+  saveSettings();
+  ["size","lead","width","lineY","band"].forEach(function(id){
+    var el = $(id); if(el){ el.value = S[id]; el.dispatchEvent(new Event("input")); }
+  });
+  layout(); jumpToCursor(true);
+}
+$("bPreTab").addEventListener("click", function(){
+  applyPreset({size:52, lead:1.45, width:76, lineY:38, band:0});
+  toast("Full-screen framing.");
+});
+$("bPreCam").addEventListener("click", function(){
+  // narrow column, high on the screen, only a few lines showing
+  applyPreset({size:34, lead:1.5, width:44, lineY:12, band:5});
+  toast("Narrow column under the camera. Nudge Lines visible and Text size to taste.");
+});
+
+$("lang").value = S.lang;
+$("lang").addEventListener("change", function(){
+  S.lang = $("lang").value; saveSettings();
+  if(listening){ stopListening(); startListening(); }
+});
+
+$("bMic").addEventListener("click", function(){ listening ? stopListening() : startListening(); });
+$("bFind").addEventListener("click", findMe);
+$("bBack").addEventListener("click", function(){ nudge(-1); });
+$("bFwd").addEventListener("click", function(){ nudge(1); });
+$("bScript").addEventListener("click", function(){ openPanel("pScript"); refreshSlots(); });
+$("bSet").addEventListener("click", function(){ openPanel("pSet"); diag(); });
+Array.prototype.forEach.call(document.querySelectorAll("[data-close]"), function(b){
+  b.addEventListener("click", function(){ closePanel(b.dataset.close); showBar(false); });
+});
+
+$("bApply").addEventListener("click", function(){
+  S.text = $("text").value; saveSettings();
+  build(S.text); closePanel("pScript"); showBar(false);
+  toast(toks.length + " words loaded.");
+});
+$("bPaste").addEventListener("click", function(){
+  if(!navigator.clipboard || !navigator.clipboard.readText){
+    toast("This browser will not share the clipboard. Long-press the box and paste."); return;
+  }
+  navigator.clipboard.readText().then(function(t){
+    $("text").value = t; toast("Pasted. Now tap Load into prompter.");
+  }).catch(function(){ toast("Clipboard refused. Long-press the box and paste."); });
+});
+$("bFile").addEventListener("click", function(){ $("file").click(); });
+$("file").addEventListener("change", function(){
+  var f = $("file").files && $("file").files[0];
+  if(!f) return;
+  var r = new FileReader();
+  r.onload = function(){
+    var t = String(r.result || "");
+    // strip the most common Obsidian/markdown furniture, keep the words
+    t = t.replace(/^---[\s\S]*?\n---\n/, "")
+         .replace(/^#{1,6}\s*/gm, "")
+         .replace(/\*\*(.*?)\*\*/g, "$1")
+         .replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, "$2")
+         .replace(/[*_`>]/g, "");
+    $("text").value = t;
+    toast("File read. Now tap Load into prompter.");
+  };
+  r.readAsText(f);
+  $("file").value = "";
+});
+
+$("bLoad").addEventListener("click", function(){
+  var n = $("slot").value, all = scripts();
+  if(!n || !all[n]){ toast("Pick a saved script first."); return; }
+  $("text").value = all[n]; S.text = all[n]; S.slot = n; saveSettings();
+  build(S.text); closePanel("pScript"); showBar(false);
+  toast('Loaded "' + n + '".');
+});
+$("bSave").addEventListener("click", function(){
+  var n = window.prompt("Save this script as:", S.slot || "");
+  if(n === null) return;
+  n = n.trim(); if(!n){ toast("Needs a name."); return; }
+  var all = scripts();
+  if(all[n] && all[n] !== $("text").value){
+    ask('"' + n + '" already exists. Replace what is saved under that name?', function(){
+      all[n] = $("text").value;
+      if(setScripts(all)){ S.slot=n; saveSettings(); refreshSlots(); toast("Replaced."); }
+    });
+    return;
+  }
+  all[n] = $("text").value;
+  if(setScripts(all)){ S.slot = n; saveSettings(); refreshSlots(); toast('Saved as "' + n + '".'); }
+});
+$("bUpdate").addEventListener("click", function(){
+  var n = $("slot").value; if(!n){ toast("No saved script selected."); return; }
+  var all = scripts(); all[n] = $("text").value;
+  if(setScripts(all)) toast('Updated "' + n + '".');
+});
+$("bDelete").addEventListener("click", function(){
+  var n = $("slot").value; if(!n){ toast("No saved script selected."); return; }
+  var all = scripts(), words = String(all[n]||"").split(/\s+/).filter(Boolean).length;
+  ask('Delete the saved script "' + n + '" (' + words + ' words)? ' +
+      'The text currently in the editor is not touched, so copy it out first if you need it.',
+      function(){
+        delete all[n];
+        if(setScripts(all)){ if(S.slot===n){ S.slot=""; saveSettings(); } refreshSlots(); toast("Deleted."); }
+      });
+});
+
+$("bMirrorX").addEventListener("click", function(){
+  S.mirrorX = !S.mirrorX; saveSettings(); layout();
+  this.setAttribute("aria-pressed", S.mirrorX ? "true":"false");
+});
+$("bMirrorY").addEventListener("click", function(){
+  S.mirrorY = !S.mirrorY; saveSettings(); layout();
+  this.setAttribute("aria-pressed", S.mirrorY ? "true":"false");
+});
+$("bKeep").addEventListener("click", function(){ keepAwake(!S.keep); });
+$("bFull").addEventListener("click", function(){
+  if(document.fullscreenElement){ document.exitFullscreen().catch(function(){}); return; }
+  var r = document.documentElement.requestFullscreen;
+  if(!r){ toast("Fullscreen is not available here."); return; }
+  r.call(document.documentElement).catch(function(){ toast("Fullscreen refused."); });
+});
+$("bRoll").addEventListener("click", function(){
+  rolling = !rolling;
+  if(rolling){ stopListening(); setState("Timed roll"); this.textContent = "Stop timed roll";
+               closePanel("pSet"); showBar(false); }
+  else { setState("Idle"); this.textContent = "Start timed roll"; target = offset; }
+});
+
+// tap a word to set the position; tap elsewhere to show the bar
+stage.addEventListener("click", function(ev){
+  var el = ev.target;
+  if(el && el.classList && el.classList.contains("w")){
+    cursor = parseInt(el.dataset.i, 10) || 0;
+    lastMatchAt = Date.now(); lostShown = false;
+    paint(); jumpToCursor(true);
+    showBar(false);
+    return;
+  }
+  showBar(false);
+});
+
+document.addEventListener("keydown", function(ev){
+  if(/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
+  var k = ev.key;
+  if(k === " " || k === "Spacebar"){ ev.preventDefault(); listening ? stopListening() : startListening(); }
+  else if(k === "ArrowDown" || k === "PageDown"){ ev.preventDefault(); nudge(1); }
+  else if(k === "ArrowUp" || k === "PageUp"){ ev.preventDefault(); nudge(-1); }
+  else if(k === "m" || k === "M"){ $("bMirrorX").click(); }
+  else if(k === "f" || k === "F"){ $("bFull").click(); }
+  else if(k === "Escape"){ showBar(true); }
+});
+
+// on a laptop there is a pointer, so moving it should surface the controls
+if(window.matchMedia && window.matchMedia("(pointer:fine)").matches){
+  window.addEventListener("mousemove", function(){
+    if($("bar").classList.contains("hidden")) showBar(false);
+  });
+}
+
+window.addEventListener("resize", function(){ layout(); jumpToCursor(true); });
+window.addEventListener("orientationchange", function(){
+  setTimeout(function(){ layout(); jumpToCursor(true); }, 250);
+});
+
+function diag(){
+  var bits = [];
+  bits.push("<b>Speech recognition:</b> " + (SR ? "available" : "NOT available in this browser"));
+  bits.push("<b>Secure context:</b> " + (window.isSecureContext ? "yes" : "no — the microphone will be refused"));
+  bits.push("<b>Wake lock:</b> " + (navigator.wakeLock ? "available" : "not available"));
+  bits.push("<b>Words loaded:</b> " + toks.length + " · at word " + cursor);
+  $("diag").innerHTML = bits.join("<br>");
+}
+
+if(S.keep) keepAwake(true);
+$("bKeep").setAttribute("aria-pressed", S.keep ? "true" : "false");
+showBar(true);
+setTimeout(function(){ showBar(false); }, 3000);
+if(!SR) setState("No speech recognition — use timed roll");
+
+})();
+</script>
+</body>
+</html>
