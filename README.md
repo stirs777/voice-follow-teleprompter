@@ -29,9 +29,9 @@ The microphone only works on an **https** address. A file opened directly from
 the device's storage (`file://...`) is refused by Chrome, silently. So it has
 to be served. Either:
 
-1. **GitHub Pages** — what this repo does. The workflow in
-   `.github/workflows/pages.yml` deploys on every push and enables Pages by
-   itself, so there is no settings toggle to find.
+1. **GitHub Pages** — what this repo does. Settings → Pages → Source:
+   *Deploy from a branch*, `main`, `/ (root)`. Every push republishes it;
+   there is nothing to build.
 2. **Netlify Drop** — rename the file to `index.html`, go to
    `app.netlify.com/drop`, and drag it onto the page. A permanent https link in
    about ten seconds, no account needed.
