@@ -63,6 +63,19 @@ Three sliders fine-tune it:
 
 **Tablet — full screen** puts it all back.
 
+## It remembers how you had it
+
+Text size, spacing, width, reading-line height, lines visible, mirror and flip
+are remembered on their own and come back when you reopen the page. Settings
+are stored apart from the script, so a long script can never crowd them out.
+
+**Saved setups** keep more than one look — a tablet rig and a laptop rig, say —
+under names you choose, and switch between them in a tap: **Setup → Saved
+setups → Save this look / Recall**.
+
+If the device is refusing to store anything, **Setup** says so at the bottom
+rather than quietly forgetting.
+
 ## The controls
 
 | Button | What it does |

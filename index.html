@@ -52,7 +52,9 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--stage);color:var
   text-transform:uppercase;color:var(--amber);opacity:.75;display:block;margin:.8em 0 .3em}
 
 /* reading line — ticks at the margins, nothing across the text */
-#line{position:fixed;left:0;right:0;height:0;pointer-events:none;z-index:4}
+/* absolute, and inside #stage, so mirroring and flipping carry the marks
+   along with the words instead of stranding them */
+#line{position:absolute;left:0;right:0;height:0;pointer-events:none;z-index:4}
 #line::before,#line::after{content:"";position:absolute;top:-1px;height:2px;width:26px;
   background:var(--amber);opacity:.85}
 #line::before{left:0}
@@ -140,8 +142,8 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
 
 <div id="stage">
   <div id="veil"><div id="script" aria-live="off"></div></div>
+  <div id="line"><span></span></div>
 </div>
-<div id="line"><span></span></div>
 
 <div id="status">
   <i id="dot"></i>
@@ -207,6 +209,17 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
     <p class="note">The laptop preset pulls the text into a narrow column high on
     the screen and shows only a few lines at a time, so your eyes stay close to
     the lens instead of travelling down the display.</p>
+    <label class="row">Saved setups
+      <select id="setup"><option value="">&mdash; none saved &mdash;</option></select>
+    </label>
+    <div class="btnrow">
+      <button id="bLookSave">Save this look</button>
+      <button id="bLookLoad">Recall</button>
+      <button id="bLookDel" class="danger">Delete</button>
+    </div>
+    <p class="note">Your current look is remembered on its own and comes back
+    when you reopen the page. Saved setups are for keeping more than one &mdash;
+    a tablet rig and a laptop rig, say &mdash; and switching between them in a tap.</p>
     <hr>
     <label class="row"><span class="rowhead">Lines visible <span class="val" id="vBand"></span></span>
       <input type="range" id="band" min="0" max="14" step="1">
@@ -325,14 +338,72 @@ var stage=$("stage"), veil=$("veil"), scriptEl=$("script"), lineEl=$("line");
 /* ------------------------------------------------------------------ *
  *  Settings persistence (per-device convenience only)
  * ------------------------------------------------------------------ */
+/* The script is kept in its own key. Settings used to be written together
+   with the whole script on every slider movement, so a long script meant a
+   large write dozens of times a second -- and if any one of those writes was
+   refused, the look you had just dialled in went with it. Now a settings
+   write is a few hundred bytes. */
+var TEXT_KEY = "vftp.text", SET_KEY = "vftp.settings";
+var storageOK = true, saveTimer = null;
+
 function loadSettings(){
   try{
-    var raw = localStorage.getItem("vftp.settings");
-    if(raw){ var o=JSON.parse(raw); for(var k in S) if(k in o) S[k]=o[k]; }
-  }catch(e){}
+    var raw = localStorage.getItem(SET_KEY);
+    if(raw){
+      var o = JSON.parse(raw);
+      for(var k in S){ if(k !== "text" && (k in o)) S[k] = o[k]; }
+      if(typeof o.text === "string" && o.text){
+        S.text = o.text;                                   // migrate the old combined blob
+        try{ localStorage.setItem(TEXT_KEY, o.text); }catch(e){}
+      }
+    }
+    var t = localStorage.getItem(TEXT_KEY);
+    if(typeof t === "string" && t) S.text = t;
+  }catch(e){ storageOK = false; }
 }
+
+function writeSettings(){
+  try{
+    var o = {};
+    for(var k in S){ if(k !== "text") o[k] = S[k]; }
+    localStorage.setItem(SET_KEY, JSON.stringify(o));
+    storageOK = true;
+  }catch(e){
+    storageOK = false;
+    toast("This device is refusing to save settings. Check site data is allowed.");
+  }
+}
+
+/* Slider drags fire constantly; one write just after you stop is plenty. */
 function saveSettings(){
-  try{ localStorage.setItem("vftp.settings", JSON.stringify(S)); }catch(e){}
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(writeSettings, 250);
+}
+
+function saveText(){
+  try{ localStorage.setItem(TEXT_KEY, S.text); }
+  catch(e){ toast("The script is too large to keep on this device. Save it as a file instead."); }
+}
+
+/* Named setups: the whole look under a name, so recovering a rig is one tap
+   rather than re-dialling four sliders. */
+var LOOK = ["size","lead","width","lineY","band","mirrorX","mirrorY"];
+function setups(){
+  try{ return JSON.parse(localStorage.getItem("vftp.setups") || "{}"); }catch(e){ return {}; }
+}
+function putSetups(o){
+  try{ localStorage.setItem("vftp.setups", JSON.stringify(o)); return true; }
+  catch(e){ toast("Could not save the setup."); return false; }
+}
+function refreshSetups(){
+  var sel = $("setup"), all = setups(), names = Object.keys(all).sort();
+  sel.textContent = "";
+  var o0 = document.createElement("option");
+  o0.value = ""; o0.textContent = names.length ? "\u2014 pick a setup \u2014" : "\u2014 none saved \u2014";
+  sel.appendChild(o0);
+  names.forEach(function(n){
+    var o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o);
+  });
 }
 function scripts(){
   try{ return JSON.parse(localStorage.getItem("vftp.scripts")||"{}"); }catch(e){ return {}; }
@@ -993,6 +1064,42 @@ function applyPreset(p){
   });
   layout(); jumpToCursor(true);
 }
+function applyLook(o){
+  LOOK.forEach(function(k){ if(k in o) S[k] = o[k]; });
+  writeSettings();
+  ["size","lead","width","lineY","band"].forEach(function(id){
+    var el = $(id); if(el){ el.value = S[id]; el.dispatchEvent(new Event("input")); }
+  });
+  $("bMirrorX").setAttribute("aria-pressed", S.mirrorX ? "true":"false");
+  $("bMirrorY").setAttribute("aria-pressed", S.mirrorY ? "true":"false");
+  layout(); jumpToCursor(true);
+}
+
+$("bLookSave").addEventListener("click", function(){
+  var n = window.prompt("Save this look as:", "");
+  if(n === null) return;
+  n = n.trim(); if(!n){ toast("Needs a name."); return; }
+  var all = setups(), o = {};
+  LOOK.forEach(function(k){ o[k] = S[k]; });
+  var had = !!all[n];
+  all[n] = o;
+  if(putSetups(all)){
+    refreshSetups(); $("setup").value = n;
+    toast(had ? 'Replaced "' + n + '".' : 'Saved "' + n + '".');
+  }
+});
+$("bLookLoad").addEventListener("click", function(){
+  var n = $("setup").value, all = setups();
+  if(!n || !all[n]){ toast("Pick a saved setup first."); return; }
+  applyLook(all[n]); toast('Recalled "' + n + '".');
+});
+$("bLookDel").addEventListener("click", function(){
+  var n = $("setup").value, all = setups();
+  if(!n || !all[n]){ toast("Pick a saved setup first."); return; }
+  ask('Delete the saved setup "' + n + '"? Your current look on screen is not changed.',
+      function(){ delete all[n]; if(putSetups(all)){ refreshSetups(); toast("Deleted."); } });
+});
+
 $("bPreTab").addEventListener("click", function(){
   applyPreset({size:52, lead:1.45, width:76, lineY:38, band:0});
   toast("Full-screen framing.");
@@ -1020,7 +1127,7 @@ Array.prototype.forEach.call(document.querySelectorAll("[data-close]"), function
 });
 
 $("bApply").addEventListener("click", function(){
-  S.text = $("text").value; saveSettings();
+  S.text = $("text").value; saveText(); saveSettings();
   build(S.text); closePanel("pScript"); showBar(false);
   toast(toks.length + " words loaded.");
 });
@@ -1055,7 +1162,7 @@ $("file").addEventListener("change", function(){
 $("bLoad").addEventListener("click", function(){
   var n = $("slot").value, all = scripts();
   if(!n || !all[n]){ toast("Pick a saved script first."); return; }
-  $("text").value = all[n]; S.text = all[n]; S.slot = n; saveSettings();
+  $("text").value = all[n]; S.text = all[n]; S.slot = n; saveText(); saveSettings();
   build(S.text); closePanel("pScript"); showBar(false);
   toast('Loaded "' + n + '".');
 });
@@ -1170,11 +1277,15 @@ function diag(){
   bits.push("<b>Secure context:</b> " + (window.isSecureContext ? "yes" : "no — the microphone will be refused"));
   bits.push("<b>Wake lock:</b> " + (navigator.wakeLock ? "available" : "not available"));
   bits.push("<b>Words loaded:</b> " + toks.length + " · at word " + cursor);
+  var probe = "no";
+  try{ localStorage.setItem("vftp.probe","1"); localStorage.removeItem("vftp.probe"); probe = "yes"; }catch(e){}
+  bits.push("<b>Settings can be saved:</b> " + probe + (storageOK ? "" : " (a save was refused)"));
   bits.push("<b>Remote library:</b> " + (window.mqtt ? "loaded" : "did NOT load"));
   bits.push("<b>Remote link:</b> " + (link.on ? "connected as " + link.room : "not connected"));
   $("diag").innerHTML = bits.join("<br>");
 }
 
+refreshSetups();
 if(S.keep) keepAwake(true);
 $("bKeep").setAttribute("aria-pressed", S.keep ? "true" : "false");
 showBar(true);
