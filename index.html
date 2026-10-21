@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Voice-Follow Teleprompter</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
 /* Layout: a full-bleed reading stage with a fixed reading line at 38% height,
    a slim instrument bar pinned to the bottom, and panels that slide up over it.
@@ -240,6 +241,20 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
       <span class="note">Lower holds position until it is sure. Higher follows faster but
       may jump on repeated words.</span></label>
     <hr>
+    <label class="row"><span class="rowhead">Remote control <span class="val" id="vLink">off</span></span>
+      <input type="text" id="room" placeholder="pair code" autocomplete="off"
+             autocapitalize="characters" spellcheck="false" maxlength="8"></label>
+    <div class="btnrow">
+      <button id="bLink" class="primary">Connect remote</button>
+      <button id="bUnlink">Disconnect</button>
+      <button id="bShare" aria-pressed="true">Send text to remote</button>
+    </div>
+    <p class="note">On the spare tablet open this same address with
+    <code>remote.html</code> on the end, and enter the same pair code. Both
+    devices need internet. Only the pair code, your position and a few words
+    around it travel over the link &mdash; turn off <b>Send text to remote</b>
+    and nothing from your script leaves this device.</p>
+    <hr>
     <label class="row"><span class="rowhead">Fallback scroll speed <span class="val" id="vSpeed"></span></span>
       <input type="range" id="speed" min="0" max="60" step="1"></label>
     <div class="btnrow">
@@ -289,7 +304,8 @@ var SAMPLE =
 
 var S = {                        // persisted settings
   size:52, lead:1.45, width:76, lineY:38, sens:3, speed:18, band:0,
-  mirrorX:false, mirrorY:false, lang:"en-US", keep:false, text:SAMPLE, slot:""
+  mirrorX:false, mirrorY:false, lang:"en-US", keep:false, text:SAMPLE, slot:"",
+  room:"", share:true
 };
 var toks = [];                   // [{norm, el, cue}]
 var cursor = 0;                  // index of the next word expected
@@ -299,7 +315,7 @@ var measured = false;
 var listening = false, rolling = false;
 var rec = null, recAlive = false, restartTimer = null;
 var heardFinal = [], heardInterim = [];
-var lastMatchAt = 0, lostShown = false;
+var lastMatchAt = 0, lostShown = false, matchWordCount = 0, creepAt = 0;
 var wakeLock = null;
 var barTimer = null;
 
@@ -342,6 +358,7 @@ function build(raw){
   var blocks = String(raw||"").replace(/\r/g,"").split(/\n\s*\n/);
   var frag = document.createDocumentFragment();
 
+  var pIndex = 0;
   blocks.forEach(function(block){
     var lines = block.split("\n");
     var p = document.createElement("p");
@@ -356,7 +373,7 @@ function build(raw){
         c.className = "cue"; c.textContent = body;
         p.appendChild(c);
         // cue words are placed in the token list but flagged so tracking skips them
-        words.forEach(function(w){ toks.push({norm:norm(w), el:c, cue:true}); });
+        words.forEach(function(w){ toks.push({norm:norm(w), el:c, cue:true, p:pIndex}); });
         return;
       }
       words.forEach(function(w,i){
@@ -365,11 +382,11 @@ function build(raw){
         s.textContent = (i ? " " : "") + w;
         s.dataset.i = toks.length;
         host.appendChild(s);
-        toks.push({norm:norm(w), el:s, cue:false});
+        toks.push({norm:norm(w), el:s, cue:false, p:pIndex});
       });
       host.appendChild(document.createTextNode(" "));
     });
-    if(p.childNodes.length) frag.appendChild(p);
+    if(p.childNodes.length){ frag.appendChild(p); pIndex++; }
   });
 
   scriptEl.appendChild(frag);
@@ -502,7 +519,7 @@ function near(a,b){                                // tolerant word equality
    script. Returns {pos, score} where pos is the script index that word
    landed on. Score counts supporting words, with a mild preference for
    staying near the current cursor and for moving forward rather than back. */
-function bestPos(tail, lo, hi){
+function anchorScan(tail, lo, hi){
   var best = {pos:-1, score:-1};
   if(!tail.length) return best;
   var last = tail[tail.length-1];
@@ -531,6 +548,25 @@ function bestPos(tail, lo, hi){
   return best;
 }
 
+/* The single biggest cause of getting stuck was anchoring only on the LAST
+   word heard: if the recogniser mangles one word every time you say it, that
+   anchor never lands and nothing moves no matter how often you repeat it.
+   So try the last three heard words as anchors and take the best. k is how
+   many heard words sit after the anchor, which is how far past the matched
+   script word the cursor belongs. */
+function bestPos(tail, lo, hi){
+  var best = {pos:-1, score:-1, k:1};
+  var maxK = Math.min(3, tail.length);
+  for(var k=1; k<=maxK; k++){
+    var sub = tail.slice(0, tail.length - (k-1));
+    if(!sub.length) break;
+    var r = anchorScan(sub, lo, hi);
+    r.score -= (k-1) * 0.35;          // a fresher anchor is worth more
+    if(r.score > best.score){ best = {pos:r.pos, score:r.score, k:k}; }
+  }
+  return best;
+}
+
 function sensThreshold(){
   // sens 1 (cautious) .. 5 (eager)
   return [0,2.7,2.2,1.8,1.5,1.2][S.sens] || 1.8;
@@ -540,15 +576,43 @@ function track(){
   if(!listening || rolling || !toks.length) return;
   var tail = heardFinal.concat(heardInterim).slice(-6);
   if(!tail.length) return;
+
+  /* The longer we have gone without a match while you are clearly still
+     talking, the less sure we insist on being, and the further ahead we look.
+     This is what stops a single unrecognisable word from wedging the page. */
+  var stuck = Date.now() - lastMatchAt;
+  var thr = sensThreshold(), fwd = 70;
+  if(stuck > 3000){ thr -= 0.45; fwd = 110; }
+  if(stuck > 7000){ thr -= 0.45; fwd = 160; }
+  if(thr < 0.9) thr = 0.9;
+
   var lo = Math.max(0, cursor - 12);
-  var hi = Math.min(toks.length-1, cursor + 70);
+  var hi = Math.min(toks.length-1, cursor + fwd);
   var b = bestPos(tail, lo, hi);
-  if(b.pos < 0 || b.score < sensThreshold()) return;
+
+  if(b.pos < 0 || b.score < thr){
+    /* Nothing confident. If a word simply cannot be recognised -- a name, a
+       piece of archaic language -- repeating it will never help, so step
+       past it one word at a time and let the NEXT word catch the thread.
+       Only while you are plainly still reading: that is what the partial
+       score and the count of words spoken since the last match establish.
+       During an ad-lib nothing matches at all and the page stays put. */
+    var spoken = heardFinal.length - matchWordCount;
+    if(b.score > 0.2 && stuck > 5000 && spoken >= 4 && Date.now() - creepAt > 2000){
+      cursor = firstReal(cursor + 1);
+      creepAt = Date.now();
+      setState("Stepping past a word it cannot hear");
+      paint(); jumpToCursor(false); publishState();
+    }
+    return;
+  }
   if(b.pos < cursor && b.score < 2.5) return;      // going back needs several matching words
-  cursor = firstReal(b.pos + 1);
+  cursor = firstReal(b.pos + b.k);
   lastMatchAt = Date.now(); lostShown = false;
+  matchWordCount = heardFinal.length;
   setState("Following");
   paint(); jumpToCursor(false);
+  publishState();
 }
 
 function findMe(){                                 // search the whole script
@@ -558,7 +622,7 @@ function findMe(){                                 // search the whole script
   var b = bestPos(tail, 0, toks.length-1);
   cursor = save;
   if(b.pos < 0 || b.score < 1.6){ toast("Could not place that phrase."); return; }
-  cursor = firstReal(b.pos + 1);
+  cursor = firstReal(b.pos + b.k);
   lastMatchAt = Date.now(); lostShown = false;
   paint(); jumpToCursor(true);
   toast("Found it.");
@@ -569,11 +633,33 @@ function findMe(){                                 // search the whole script
  * ------------------------------------------------------------------ */
 var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
+var micPrimed = false;
+
+/* Chrome's permission prompt that arrives via speech recognition is easy to
+   miss or dismiss, which is why the first few taps can appear to do nothing.
+   Asking for the microphone directly puts a clear prompt up once, and the
+   answer is then remembered for the site. */
+function primeMic(next){
+  if(micPrimed || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    micPrimed = true; return next();
+  }
+  setState("Asking for the microphone");
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+    stream.getTracks().forEach(function(t){ t.stop(); });   // we only needed the permission
+    micPrimed = true; next();
+  }).catch(function(){
+    micPrimed = true;                       // let recognition try and report for itself
+    toast("Microphone not granted. Tap the padlock in the address bar to allow it.");
+    next();
+  });
+}
+
 function startListening(){
   if(!SR){
     toast("This browser has no speech recognition. Use the timed roll instead.");
     return;
   }
+  if(!micPrimed){ return primeMic(startListening); }
   rolling = false;
   listening = true;
   lastMatchAt = Date.now(); lostShown = false;
@@ -655,6 +741,149 @@ function reflectMic(){
 }
 
 /* ------------------------------------------------------------------ *
+ *  Remote control link
+ *
+ *  Two browsers cannot talk to each other directly, so commands go through
+ *  a public MQTT relay. If one relay is unreachable the next is tried, so a
+ *  single dead host does not cost you the remote. Nothing is stored there:
+ *  messages pass through and are gone.
+ * ------------------------------------------------------------------ */
+var BROKERS = [
+  "wss://broker.emqx.io:8084/mqtt",
+  "wss://broker.hivemq.com:8884/mqtt",
+  "wss://test.mosquitto.org:8081/mqtt"
+];
+var link = {c:null, room:"", bi:0, on:false, lastPub:0};
+
+function roomCode(){
+  var a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", r = "";
+  for(var i=0;i<5;i++) r += a[Math.floor(Math.random()*a.length)];
+  return r;
+}
+function linkState(txt){ $("vLink").textContent = txt; }
+
+function connectLink(room){
+  if(!window.mqtt){ toast("The remote library did not load. Check the connection and reload."); return; }
+  disconnectLink(true);
+  link.room = room; link.bi = 0;
+  S.room = room; saveSettings();
+  tryBroker();
+}
+
+function tryBroker(){
+  if(!link.room) return;
+  if(link.bi >= BROKERS.length){
+    linkState("no relay reachable");
+    toast("No relay could be reached. Check that this device is online.");
+    return;
+  }
+  var url = BROKERS[link.bi];
+  linkState("connecting " + (link.bi+1) + "/" + BROKERS.length);
+  var c;
+  try{
+    c = window.mqtt.connect(url, {
+      connectTimeout: 7000, reconnectPeriod: 0, clean: true,
+      clientId: "vftp-p-" + Math.random().toString(16).slice(2,10)
+    });
+  }catch(e){ link.bi++; return tryBroker(); }
+  link.c = c;
+  var settled = false;
+  var fail = function(){
+    if(settled) return; settled = true;
+    try{ c.end(true); }catch(e){}
+    if(link.c === c){ link.c = null; link.on = false; }
+    link.bi++; tryBroker();
+  };
+  c.on("connect", function(){
+    settled = true; link.on = true;
+    c.subscribe("vftp/" + link.room + "/cmd");
+    linkState("linked \u00b7 " + link.room);
+    toast("Remote link open. Pair code " + link.room);
+    publishState(true);
+  });
+  c.on("message", function(t, m){
+    var o;
+    try{ o = JSON.parse(m.toString()); }catch(e){ return; }
+    handleCommand(o);
+  });
+  c.on("error", fail);
+  c.on("close", function(){
+    if(!settled) return fail();
+    if(link.on){
+      link.on = false; linkState("dropped \u2014 reconnecting");
+      link.bi = 0; setTimeout(tryBroker, 1500);
+    }
+  });
+}
+
+function disconnectLink(quiet){
+  if(link.c){ try{ link.c.end(true); }catch(e){} }
+  link.c = null; link.on = false;
+  if(!quiet){ link.room = ""; S.room = ""; saveSettings(); linkState("off"); }
+}
+
+/* The remote is a control surface, not an authority: every command below is
+   something the buttons on this device already do. */
+function handleCommand(o){
+  var c = o && o.c;
+  if(c === "listen") listening ? stopListening() : startListening();
+  else if(c === "stop") stopListening();
+  else if(c === "fwd") nudge(1);
+  else if(c === "back") nudge(-1);
+  else if(c === "skip"){ cursor = firstReal(cursor+1); lastMatchAt = Date.now(); paint(); jumpToCursor(true); }
+  else if(c === "parafwd") paraJump(1);
+  else if(c === "paraback") paraJump(-1);
+  else if(c === "top"){ cursor = firstReal(0); lastMatchAt = Date.now(); paint(); jumpToCursor(true); }
+  else if(c === "find") findMe();
+  else if(c === "roll") $("bRoll").click();
+  else return;
+  publishState(true);
+}
+
+function paraJump(dir){
+  if(!toks.length) return;
+  var here = toks[Math.min(cursor, toks.length-1)].p;
+  var want = here + dir;
+  if(dir < 0){
+    var startHere = -1;
+    for(var k=0;k<toks.length;k++){ if(toks[k].p === here && !toks[k].cue){ startHere = k; break; } }
+    if(startHere >= 0 && cursor > startHere + 2) want = here;   // first press returns to the top of this paragraph
+  }
+  if(want < 0) want = 0;
+  var i = -1;
+  for(var j=0;j<toks.length;j++){ if(toks[j].p === want && !toks[j].cue){ i = j; break; } }
+  if(i < 0) i = dir > 0 ? toks.length-1 : 0;
+  cursor = firstReal(i);
+  lastMatchAt = Date.now(); lostShown = false;
+  paint(); jumpToCursor(true);
+}
+
+function publishState(force){
+  if(!link.on || !link.c) return;
+  var now = Date.now();
+  if(!force && now - link.lastPub < 400) return;
+  link.lastPub = now;
+  var snippet = "";
+  if(S.share){
+    var out = [];
+    for(var i=cursor; i<toks.length && out.length<9; i++){
+      if(toks[i].cue || !toks[i].el) continue;
+      out.push(toks[i].el.textContent.trim());
+    }
+    snippet = out.join(" ");
+  }
+  var msg = {
+    i: cursor, n: toks.length,
+    l: listening ? 1 : 0, r: rolling ? 1 : 0,
+    s: $("state").textContent,
+    h: heardFinal.concat(heardInterim).slice(-7).join(" "),
+    w: snippet
+  };
+  try{ link.c.publish("vftp/" + link.room + "/st", JSON.stringify(msg)); }catch(e){}
+}
+setInterval(function(){ publishState(false); }, 1000);
+
+/* ------------------------------------------------------------------ *
  *  Screen wake lock
  * ------------------------------------------------------------------ */
 function keepAwake(on){
@@ -715,7 +944,7 @@ function nudge(dir){
     if(toks[cursor] && !toks[cursor].cue && Math.abs(cursorY() - start) > 4) break;
   }
   if(cursor < 0) cursor = 0;
-  paint(); jumpToCursor(true);
+  paint(); jumpToCursor(true); publishState(true);
 }
 
 function refreshSlots(){
@@ -861,6 +1090,22 @@ $("bDelete").addEventListener("click", function(){
       });
 });
 
+$("room").value = S.room || "";
+$("bShare").setAttribute("aria-pressed", S.share ? "true" : "false");
+$("bShare").addEventListener("click", function(){
+  S.share = !S.share; saveSettings();
+  this.setAttribute("aria-pressed", S.share ? "true" : "false");
+  toast(S.share ? "The remote will show where you are." : "The remote will show position only, no text.");
+});
+$("bLink").addEventListener("click", function(){
+  var r = ($("room").value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g,"");
+  if(!r){ r = roomCode(); $("room").value = r; }
+  connectLink(r);
+});
+$("bUnlink").addEventListener("click", function(){
+  disconnectLink(false); toast("Remote disconnected.");
+});
+
 $("bMirrorX").addEventListener("click", function(){
   S.mirrorX = !S.mirrorX; saveSettings(); layout();
   this.setAttribute("aria-pressed", S.mirrorX ? "true":"false");
@@ -889,7 +1134,7 @@ stage.addEventListener("click", function(ev){
   if(el && el.classList && el.classList.contains("w")){
     cursor = parseInt(el.dataset.i, 10) || 0;
     lastMatchAt = Date.now(); lostShown = false;
-    paint(); jumpToCursor(true);
+    paint(); jumpToCursor(true); publishState(true);
     showBar(false);
     return;
   }
@@ -925,6 +1170,8 @@ function diag(){
   bits.push("<b>Secure context:</b> " + (window.isSecureContext ? "yes" : "no — the microphone will be refused"));
   bits.push("<b>Wake lock:</b> " + (navigator.wakeLock ? "available" : "not available"));
   bits.push("<b>Words loaded:</b> " + toks.length + " · at word " + cursor);
+  bits.push("<b>Remote library:</b> " + (window.mqtt ? "loaded" : "did NOT load"));
+  bits.push("<b>Remote link:</b> " + (link.on ? "connected as " + link.room : "not connected"));
   $("diag").innerHTML = bits.join("<br>");
 }
 

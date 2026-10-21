@@ -7,7 +7,9 @@ read, rather than at a fixed speed you have to match.
 
 **Live:** https://stirs777.github.io/voice-follow-teleprompter/
 
-You will need to click the Find Me button a couple of times and grant Chrome microphone access.  
+On first run Chrome asks for microphone access — say yes, and choose *Allow
+every time* so it stops asking. If the prompt does not appear, tap the padlock
+in the address bar and allow the microphone there, then reload.
 
 ## How the tracking works
 
@@ -76,6 +78,43 @@ Three sliders fine-tune it:
 A **Bluetooth page-turner pedal** works: `Space` listen on/off, `down` forward a
 line, `up` back a line, `M` mirror, `F` fullscreen. On a laptop, moving the
 mouse brings the control bar back; on a tablet, tap anywhere that is not a word.
+
+## When it cannot hear a word
+
+Some words defeat speech recognition every time — proper nouns, archaic
+language, anything unusual. Repeating them does not help, because the
+recogniser returns the same wrong thing each time. Three things handle this:
+
+- The matcher anchors on any of the **last three words** heard, not only the
+  most recent one, so a single mangled word no longer blocks a match.
+- The longer it goes unmatched **while you are plainly still reading**, the
+  less certain it insists on being and the further ahead it looks.
+- If a word is genuinely unrecognisable it **steps past it**, one word at a
+  time, so the next word can catch the thread. This happens only while your
+  speech is partly matching; during an ad-lib nothing matches at all and the
+  page stays put.
+
+## Remote control from a second device
+
+Open **`remote.html`** on a spare phone or tablet — the prompter's address with
+`remote.html` on the end. On the prompter go to **Setup → Remote control**, tap
+**Connect remote** for a pair code, and enter that code on the remote.
+
+The remote gives you **Listen/Stop**, line back and forward, paragraph back and
+forward, **Find me**, **Skip this word**, and **Top of script** (two taps, so a
+stray thumb mid-take cannot throw away your place). It also shows where the
+prompter is, what it last heard, and how far through you are — usually the
+fastest way to see *why* it is stuck.
+
+Two browsers cannot talk directly, so commands pass through a public MQTT relay
+over WebSockets. Three relays are tried in turn, so one dead host does not cost
+you the remote. Nothing is stored there. Only the pair code, your position and
+about nine words around it travel over the link — switch off **Send text to
+remote** and nothing from your script leaves the prompter at all.
+
+**With no internet,** an Android app that turns a phone into a Bluetooth
+keyboard drives the prompter using the keys listed under The controls, with no
+relay involved.
 
 ## Script formatting
 

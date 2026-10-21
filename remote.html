@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Teleprompter Remote</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+/* Layout: a status card at the top, then a grid of controls sized for a
+   thumb at arm's length. Same instrument palette as the prompter it drives. */
+:root{
+  --ink:#f2efe8; --ink-dim:#8b949e; --ink-faint:#5b646e;
+  --stage:#0b0d10; --panel:#15181d; --panel-2:#1e2228; --edge:#2b3038;
+  --amber:#e8a33d; --live:#5fd08a; --warn:#e2715a;
+  --ui:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --read:'Libre Franklin',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;min-height:100%;background:var(--stage);color:var(--ink);
+  font-family:var(--ui);overscroll-behavior:none}
+body{padding:14px max(14px,env(safe-area-inset-left,0px));
+  padding-bottom:calc(20px + env(safe-area-inset-bottom,0px));
+  display:flex;flex-direction:column;gap:12px;max-width:640px;margin-inline:auto}
+/* every column child must be allowed to shrink, or one line of nowrap text
+   pushes the whole page wider than the screen */
+body > *{min-width:0}
+
+h1{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);
+  margin:0;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+#dot{width:9px;height:9px;border-radius:50%;background:var(--ink-faint);flex:none}
+#dot.on{background:var(--live)}
+#dot.err{background:var(--warn)}
+#link{font-size:11px;color:var(--ink-dim);letter-spacing:.05em;margin-left:auto;
+  text-transform:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.card{background:var(--panel);border:1px solid var(--edge);border-radius:13px;padding:14px;
+  display:flex;flex-direction:column;gap:10px;min-width:0}
+.card > *{min-width:0}
+#where{font-family:var(--read);font-size:18px;line-height:1.5;color:var(--ink);
+  min-height:2.6em;text-wrap:pretty}
+#where.empty{color:var(--ink-faint);font-family:var(--ui);font-size:12px;line-height:1.6}
+#heard{font-size:11.5px;color:var(--ink-dim);letter-spacing:.03em;min-height:1.4em;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.meta{display:flex;justify-content:space-between;align-items:baseline;
+  font-size:11px;letter-spacing:.07em;color:var(--ink-dim)}
+.meta b{color:var(--amber);font-variant-numeric:tabular-nums;font-weight:600}
+#track{height:4px;background:var(--panel-2);border-radius:3px;overflow:hidden}
+#fill{height:100%;width:0;background:var(--amber);transition:width .3s linear}
+
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+button{font-family:var(--ui);font-size:12px;letter-spacing:.07em;color:var(--ink);
+  background:var(--panel-2);border:1px solid var(--edge);border-radius:12px;
+  padding:18px 10px;min-height:66px;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px}
+button:active{background:#2d343c;transform:scale(.985)}
+button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button .k{font-size:21px;line-height:1;color:var(--amber)}
+button span{min-width:0;max-width:100%}
+button.span2{grid-column:span 2}
+button.go{background:var(--amber);border-color:var(--amber);color:#1a1205;font-weight:600;min-height:78px}
+button.go .k{color:#1a1205}
+button.go.live{background:var(--live);border-color:var(--live);color:#06240f}
+button.go.live .k{color:#06240f}
+button.arm{border-color:var(--warn);color:var(--warn)}
+button.arm .k{color:var(--warn)}
+button:disabled{opacity:.4}
+
+.setup{display:flex;flex-direction:column;gap:9px}
+input[type=text]{font-family:var(--ui);font-size:19px;letter-spacing:.3em;text-align:center;
+  text-transform:uppercase;color:var(--ink);background:var(--panel-2);
+  border:1px solid var(--edge);border-radius:11px;padding:14px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.row2 button{min-height:50px;padding:13px 10px;font-size:11px}
+.note{font-size:11px;line-height:1.65;color:var(--ink-dim);margin:0}
+.note code{color:var(--amber)}
+#toast{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom,0px));
+  transform:translate(-50%,12px);background:var(--panel-2);border:1px solid var(--edge);
+  border-radius:10px;padding:10px 15px;font-size:12px;opacity:0;pointer-events:none;
+  transition:opacity .2s,transform .2s;max-width:88vw;text-align:center;z-index:9}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<h1><i id="dot"></i> Teleprompter Remote <span id="link">not connected</span></h1>
+
+<div class="card">
+  <div id="where" class="empty">Connect to the prompter to see where it is.</div>
+  <div id="heard"></div>
+  <div id="track"><div id="fill"></div></div>
+  <div class="meta"><span id="pos">&mdash;</span><span id="state">&mdash;</span></div>
+</div>
+
+<button id="bListen" class="go span2" disabled>
+  <span class="k">&#9679;</span><span id="listenLabel">Listen</span>
+</button>
+
+<div class="grid">
+  <button id="bBack"  disabled><span class="k">&#8593;</span>Back a line</button>
+  <button id="bFwd"   disabled><span class="k">&#8595;</span>Forward a line</button>
+  <button id="bPara-" disabled><span class="k">&#8676;</span>Paragraph back</button>
+  <button id="bPara+" disabled><span class="k">&#8677;</span>Paragraph on</button>
+  <button id="bFind"  disabled><span class="k">&#9678;</span>Find me</button>
+  <button id="bSkip"  disabled><span class="k">&#8677;|</span>Skip this word</button>
+  <button id="bTop" class="span2" disabled><span class="k">&#8648;</span><span id="topLabel">Top of script</span></button>
+</div>
+
+<div class="card setup">
+  <input type="text" id="room" placeholder="CODE" maxlength="8" autocomplete="off"
+         autocapitalize="characters" spellcheck="false">
+  <div class="row2">
+    <button id="bConnect">Connect</button>
+    <button id="bDisconnect">Disconnect</button>
+  </div>
+  <p class="note">Enter the same pair code shown on the prompter under
+  <b>Setup &rarr; Remote control</b>. Both devices need internet. Keep this page
+  open; nothing is recorded anywhere.</p>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+
+var BROKERS = [
+  "wss://broker.emqx.io:8084/mqtt",
+  "wss://broker.hivemq.com:8884/mqtt",
+  "wss://test.mosquitto.org:8081/mqtt"
+];
+
+var $ = function(id){ return document.getElementById(id); };
+var c = null, room = "", bi = 0, on = false, wakeLock = null, armTimer = null;
+var CTRLS = ["bListen","bBack","bFwd","bPara-","bPara+","bFind","bSkip","bTop"];
+
+function toast(m){
+  var t = $("toast"); t.textContent = m; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(function(){ t.classList.remove("show"); }, 2600);
+}
+function buzz(ms){ try{ navigator.vibrate && navigator.vibrate(ms || 12); }catch(e){} }
+function setLink(txt, cls){ $("link").textContent = txt; $("dot").className = cls || ""; }
+function enable(v){ CTRLS.forEach(function(id){ $(id).disabled = !v; }); }
+
+/* ---------- connection, with the same failover as the prompter ---------- */
+function connect(r){
+  if(!window.mqtt){ toast("The remote library did not load. Reload with a connection."); return; }
+  disconnect(true);
+  room = r; bi = 0;
+  try{ localStorage.setItem("vftp.remote.room", r); }catch(e){}
+  tryBroker();
+}
+
+function tryBroker(){
+  if(!room) return;
+  if(bi >= BROKERS.length){ setLink("no relay reachable", "err"); enable(false); return; }
+  setLink("connecting " + (bi+1) + "/" + BROKERS.length, "");
+  var cl;
+  try{
+    cl = window.mqtt.connect(BROKERS[bi], {
+      connectTimeout: 7000, reconnectPeriod: 0, clean: true,
+      clientId: "vftp-r-" + Math.random().toString(16).slice(2,10)
+    });
+  }catch(e){ bi++; return tryBroker(); }
+  c = cl;
+  var settled = false;
+  var fail = function(){
+    if(settled) return; settled = true;
+    try{ cl.end(true); }catch(e){}
+    if(c === cl){ c = null; on = false; }
+    bi++; tryBroker();
+  };
+  cl.on("connect", function(){
+    settled = true; on = true;
+    cl.subscribe("vftp/" + room + "/st");
+    setLink("linked · " + room, "on");
+    enable(true);
+    toast("Connected. If nothing updates, check the prompter shows the same code.");
+  });
+  cl.on("message", function(t, m){
+    var o; try{ o = JSON.parse(m.toString()); }catch(e){ return; }
+    render(o);
+  });
+  cl.on("error", fail);
+  cl.on("close", function(){
+    if(!settled) return fail();
+    if(on){ on = false; enable(false); setLink("dropped — reconnecting", "err");
+            bi = 0; setTimeout(tryBroker, 1500); }
+  });
+}
+
+function disconnect(quiet){
+  if(c){ try{ c.end(true); }catch(e){} }
+  c = null; on = false; enable(false);
+  if(!quiet){ room = ""; setLink("not connected", ""); }
+}
+
+function send(cmd){
+  if(!on || !c){ toast("Not connected."); return; }
+  buzz();
+  try{ c.publish("vftp/" + room + "/cmd", JSON.stringify({c: cmd})); }
+  catch(e){ toast("Command did not go through."); }
+}
+
+/* ---------- rendering what the prompter reports ---------- */
+function render(o){
+  var live = o.l === 1;
+  $("bListen").classList.toggle("live", live);
+  $("listenLabel").textContent = live ? "Stop listening" : "Listen";
+  $("state").textContent = o.s || "—";
+
+  if(typeof o.i === "number" && o.n){
+    var pct = Math.min(100, Math.round(o.i / o.n * 100));
+    $("fill").style.width = pct + "%";
+    $("pos").textContent = "word " + o.i.toLocaleString() + " of " + o.n.toLocaleString()
+                         + "  ·  " + pct + "%";
+  }
+  var w = $("where");
+  if(o.w){ w.textContent = o.w; w.classList.remove("empty"); }
+  else { w.textContent = "Text sharing is off on the prompter. Position only.";
+         w.classList.add("empty"); }
+  $("heard").textContent = o.h ? "heard: " + o.h : "";
+}
+
+/* ---------- controls ---------- */
+$("bListen").addEventListener("click", function(){ send("listen"); });
+$("bBack").addEventListener("click",   function(){ send("back"); });
+$("bFwd").addEventListener("click",    function(){ send("fwd"); });
+$("bPara-").addEventListener("click",  function(){ send("paraback"); });
+$("bPara+").addEventListener("click",  function(){ send("parafwd"); });
+$("bFind").addEventListener("click",   function(){ send("find"); });
+$("bSkip").addEventListener("click",   function(){ send("skip"); });
+
+/* Top of script throws away your place, and a stray thumb during a take would
+   be expensive, so it takes two deliberate presses. */
+$("bTop").addEventListener("click", function(){
+  var b = this;
+  if(b.classList.contains("arm")){
+    clearTimeout(armTimer);
+    b.classList.remove("arm");
+    $("topLabel").textContent = "Top of script";
+    buzz(28); send("top");
+    return;
+  }
+  b.classList.add("arm");
+  $("topLabel").textContent = "Tap again to go to the top";
+  buzz();
+  armTimer = setTimeout(function(){
+    b.classList.remove("arm");
+    $("topLabel").textContent = "Top of script";
+  }, 3000);
+});
+
+$("bConnect").addEventListener("click", function(){
+  var r = ($("room").value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if(!r){ toast("Enter the pair code shown on the prompter."); return; }
+  $("room").value = r;
+  connect(r);
+});
+$("bDisconnect").addEventListener("click", function(){ disconnect(false); toast("Disconnected."); });
+
+/* ---------- keep the remote awake ---------- */
+function keepAwake(){
+  if(!navigator.wakeLock) return;
+  navigator.wakeLock.request("screen").then(function(l){
+    wakeLock = l;
+    l.addEventListener("release", function(){ wakeLock = null; });
+  }).catch(function(){});
+}
+document.addEventListener("visibilitychange", function(){
+  if(document.visibilityState === "visible"){
+    if(!wakeLock) keepAwake();
+    if(room && !on){ bi = 0; tryBroker(); }
+  }
+});
+
+try{
+  var saved = localStorage.getItem("vftp.remote.room");
+  if(saved){ $("room").value = saved; }
+}catch(e){}
+enable(false);
+keepAwake();
+if(!window.mqtt) setLink("library did not load", "err");
+
+})();
+</script>
+</body>
+</html>
