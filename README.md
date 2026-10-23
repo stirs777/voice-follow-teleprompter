@@ -92,6 +92,33 @@ A **Bluetooth page-turner pedal** works: `Space` listen on/off, `down` forward a
 line, `up` back a line, `M` mirror, `F` fullscreen. On a laptop, moving the
 mouse brings the control bar back; on a tablet, tap anywhere that is not a word.
 
+## Filming with it
+
+**This app does not record anything.** It has no camera and writes no video or
+audio file. When the browser shows a microphone or recording indicator on the
+tab, that is the prompter listening so it can follow your place — nothing is
+being captured or kept. Record with something else.
+
+**Use a second device as the camera.** The prompter tablet prompts; a phone or
+second tablet runs its native camera app. This is also the better picture: a
+native camera app gives you stabilisation and proper resolution that a browser
+cannot.
+
+**One device will not do both.** Two things stop it. Most Android camera apps
+stop recording the moment they are sent to the background, so tabbing to the
+prompter ends the take. And Android hands the microphone to exactly one app,
+[feeding the loser silence rather than an error](https://source.android.com/docs/core/audio/concurrent) —
+so whichever app loses carries on looking perfectly normal while capturing
+nothing.
+
+**Split screen** fixes the first problem and not the second. Running the
+prompter and the camera app side by side does keep the camera app from being
+backgrounded, so it is worth trying — but one of the two will still be silenced.
+Either the video records mute, or the prompter stops following you. Before
+trusting it with a real take, film thirty seconds, play it back with the volume
+up, and confirm the prompter tracked at the same time. If both worked, your
+tablet allows it; if either failed, use two devices.
+
 ## When it cannot hear a word
 
 Some words defeat speech recognition every time — proper nouns, archaic

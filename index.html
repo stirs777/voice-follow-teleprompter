@@ -281,6 +281,12 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
     space keys. <code>Space</code> listen on/off · <code>&#8595;</code> forward a line ·
     <code>&#8593;</code> back a line · <code>M</code> mirror · <code>F</code> fullscreen ·
     <code>Esc</code> show the bar.</p>
+    <hr>
+    <p class="note"><b>This page never records.</b> It has no camera and saves no
+    video or audio anywhere. When your browser shows a microphone or recording
+    indicator on this tab, that is the prompter listening so it can follow your
+    place &mdash; nothing is being captured or kept. Record with a separate
+    camera, phone or tablet.</p>
     <p class="note" id="diag"></p>
   </div>
 </section>
@@ -326,7 +332,7 @@ var lastPainted = -1;
 var offset = 0, target = 0;      // scroll in px (translate on #script)
 var measured = false;
 var listening = false, rolling = false;
-var rec = null, recAlive = false, restartTimer = null;
+var rec = null, recAlive = false, restartTimer = null, noSpeechRun = 0;
 var heardFinal = [], heardInterim = [];
 var lastMatchAt = 0, lostShown = false, matchWordCount = 0, creepAt = 0;
 var wakeLock = null;
@@ -726,6 +732,7 @@ function primeMic(next){
 }
 
 function startListening(){
+  noSpeechRun = 0;
   if(!SR){
     toast("This browser has no speech recognition. Use the timed roll instead.");
     return;
@@ -764,6 +771,7 @@ function spin(){
       }
     }
     heardInterim = interim;
+    if(heardFinal.length || interim.length) noSpeechRun = 0;
     var show = heardFinal.concat(heardInterim).slice(-9).join(" ");
     $("heard").textContent = show;
     track();
@@ -778,6 +786,19 @@ function spin(){
       listening = false; dot("err"); setState("No microphone found");
     } else if(e === "network"){
       dot("err"); setState("Recognition offline — retrying");
+    }
+    else if(e === "no-speech"){
+      /* Android gives the microphone to a single app and feeds the loser
+         silence rather than an error, so a camera app taking the mic is
+         indistinguishable from a quiet room -- except that it never ends.
+         Three empty stretches in a row while you believe you are reading is
+         worth saying out loud, because the alternative is finding out later. */
+      noSpeechRun++;
+      if(noSpeechRun === 3){
+        dot("err");
+        setState("No sound reaching this tab");
+        toast("No audio is getting through. If a camera or recorder app is running, it has taken the microphone.");
+      }
     }
     // 'no-speech' and 'aborted' are normal; onend restarts us
   };
