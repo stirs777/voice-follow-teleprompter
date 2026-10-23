@@ -94,30 +94,46 @@ mouse brings the control bar back; on a tablet, tap anywhere that is not a word.
 
 ## Filming with it
 
-**This app does not record anything.** It has no camera and writes no video or
-audio file. When the browser shows a microphone or recording indicator on the
-tab, that is the prompter listening so it can follow your place — nothing is
-being captured or kept. Record with something else.
+The prompter can run the camera itself, with the script over the picture, and
+record the take. That is also the only way **one** device can record and follow
+your voice at the same time: two separate apps cannot, because Android hands
+the microphone to exactly one of them and
+[feeds the loser silence rather than an error](https://source.android.com/docs/core/audio/concurrent),
+so whichever app loses looks perfectly normal while capturing nothing. Inside a
+single page there is only one app, and that collision does not arise.
 
-**Use a second device as the camera.** The prompter tablet prompts; a phone or
-second tablet runs its native camera app. This is also the better picture: a
-native camera app gives you stabilisation and proper resolution that a browser
-cannot.
+**Setup → Camera & recording → Turn camera on**, then **Record** on the control
+bar, or the record button on the remote. The take is written on the device and
+kept only when you tap **Share / save** or **Download** — Share opens the
+Android sheet, which is usually the quickest way into Photos or Drive. Nothing
+is uploaded anywhere.
 
-**One device will not do both.** Two things stop it. Most Android camera apps
-stop recording the moment they are sent to the background, so tabbing to the
-prompter ends the take. And Android hands the microphone to exactly one app,
-[feeding the loser silence rather than an error](https://source.android.com/docs/core/audio/concurrent) —
-so whichever app loses carries on looking perfectly normal while capturing
-nothing.
+**Text backing** sets how far the picture is dimmed behind the words. Darker
+reads more easily; lighter helps you frame yourself.
 
-**Split screen** fixes the first problem and not the second. Running the
-prompter and the camera app side by side does keep the camera app from being
-backgrounded, so it is worth trying — but one of the two will still be silenced.
-Either the video records mute, or the prompter stops following you. Before
-trusting it with a real take, film thirty seconds, play it back with the volume
-up, and confirm the prompter tracked at the same time. If both worked, your
-tablet allows it; if either failed, use two devices.
+### One thing to test before you trust it
+
+Chrome's speech recognition opens its own capture rather than accepting the
+page's, and in some builds it
+[is starved when the page is capturing too](https://issues.chromium.org/issues/41403126).
+If that affects your browser, tracking stops the moment recording starts. The
+page watches for exactly that: if the recording is clearly picking up your
+voice while the tracker hears nothing, it says so instead of leaving you to
+wonder. The recording is never affected — only the voice following.
+
+So record thirty seconds, and check two things: that the take plays back with
+sound, and that the script followed you while it recorded. If tracking did not
+survive, use **Start timed roll** or the remote to move the script; everything
+else works as normal.
+
+### Quality, and when to use a real camera
+
+Browser recording gives up what a native camera app does well: stabilisation,
+full sensor resolution, proper encoding. It also holds the take in memory, so
+keep takes to roughly ten minutes — it warns you at that mark. For anything
+that matters, a second device running its native camera app still produces the
+better picture, and the prompter then has no competition for the microphone at
+all.
 
 ## When it cannot hear a word
 

@@ -64,6 +64,8 @@ button.go .k{color:#1a1205}
 button.go.live{background:var(--live);border-color:var(--live);color:#06240f}
 button.go.live .k{color:#06240f}
 button.arm{border-color:var(--warn);color:var(--warn)}
+button.rec{background:var(--warn);border-color:var(--warn);color:#2a0d07;font-weight:600}
+button.rec .k{color:#2a0d07}
 button.arm .k{color:var(--warn)}
 button:disabled{opacity:.4}
 
@@ -95,6 +97,10 @@ input[type=text]{font-family:var(--ui);font-size:19px;letter-spacing:.3em;text-a
 
 <button id="bListen" class="go span2" disabled>
   <span class="k">&#9679;</span><span id="listenLabel">Listen</span>
+</button>
+
+<button id="bRec" class="span2" disabled>
+  <span class="k">&#9210;</span><span id="recLabel">Record</span>
 </button>
 
 <div class="grid">
@@ -133,7 +139,7 @@ var BROKERS = [
 
 var $ = function(id){ return document.getElementById(id); };
 var c = null, room = "", bi = 0, on = false, wakeLock = null, armTimer = null;
-var CTRLS = ["bListen","bBack","bFwd","bPara-","bPara+","bFind","bSkip","bTop"];
+var CTRLS = ["bListen","bRec","bBack","bFwd","bPara-","bPara+","bFind","bSkip","bTop"];
 
 function toast(m){
   var t = $("toast"); t.textContent = m; t.classList.add("show");
@@ -210,6 +216,10 @@ function render(o){
   $("listenLabel").textContent = live ? "Stop listening" : "Listen";
   $("state").textContent = o.s || "—";
 
+  var taping = o.v === 1;
+  $("bRec").classList.toggle("rec", taping);
+  $("recLabel").textContent = taping ? ("Stop recording  " + (o.t || "")) : "Record";
+
   if(typeof o.i === "number" && o.n){
     var pct = Math.min(100, Math.round(o.i / o.n * 100));
     $("fill").style.width = pct + "%";
@@ -225,6 +235,7 @@ function render(o){
 
 /* ---------- controls ---------- */
 $("bListen").addEventListener("click", function(){ send("listen"); });
+$("bRec").addEventListener("click", function(){ buzz(24); send("rec"); });
 $("bBack").addEventListener("click",   function(){ send("back"); });
 $("bFwd").addEventListener("click",    function(){ send("fwd"); });
 $("bPara-").addEventListener("click",  function(){ send("paraback"); });

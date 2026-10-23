@@ -27,11 +27,21 @@
   color-scheme:dark;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* an id selector that sets display outranks the browser's own [hidden] rule,
+   so say it louder or hidden elements quietly show themselves */
+[hidden]{display:none!important}
 html,body{height:100%;margin:0;overflow:hidden;background:var(--stage);color:var(--ink);
   font-family:var(--ui-face);overscroll-behavior:none}
 
 /* ---------- reading stage ---------- */
-#stage{position:fixed;inset:0;overflow:hidden;touch-action:none}
+/* The camera fills the screen and the script sits over it, so your eyes are
+   on the lens rather than off to one side. */
+#cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#000}
+#cam.selfie{transform:scaleX(-1)}
+#scrim{position:fixed;inset:0;z-index:1;background:rgba(8,10,12,.62);pointer-events:none}
+body.cam-on #stage{background:transparent}
+body.cam-on #script .w{text-shadow:0 2px 10px rgba(0,0,0,.95),0 0 3px rgba(0,0,0,.9)}
+#stage{position:fixed;inset:0;overflow:hidden;touch-action:none;z-index:2}
 /* #veil carries the band mask in untransformed coordinates, so mirroring
    #stage cannot drag the fade out of place. */
 #veil{position:absolute;inset:0}
@@ -63,6 +73,20 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--stage);color:var
   background:linear-gradient(90deg,var(--amber),transparent 18%,transparent 82%,var(--amber));opacity:.22}
 
 /* ---------- status strip ---------- */
+#rec{position:fixed;z-index:8;top:calc(env(safe-area-inset-top,0px) + 30px);
+  left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;
+  background:rgba(21,24,29,.92);border:1px solid var(--warn);border-radius:999px;
+  padding:6px 14px;font-size:11.5px;letter-spacing:.09em;color:var(--ink);
+  font-variant-numeric:tabular-nums}
+#rec i{width:9px;height:9px;border-radius:50%;background:var(--warn);
+  animation:recpulse 1.4s ease-in-out infinite}
+@keyframes recpulse{50%{opacity:.25}}
+#take{position:fixed;z-index:11;left:50%;transform:translateX(-50%);
+  bottom:calc(76px + env(safe-area-inset-bottom,0px));
+  background:var(--panel);border:1px solid var(--amber);border-radius:13px;
+  padding:13px;display:flex;flex-direction:column;gap:9px;width:min(92vw,420px)}
+#take .lbl{font-size:11.5px;letter-spacing:.06em;color:var(--amber)}
+#take .btnrow button{min-height:48px}
 #status{position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;z-index:6;
   display:flex;align-items:center;gap:10px;font-size:11px;letter-spacing:.06em;
   padding:8px max(14px,env(safe-area-inset-left,0px));
@@ -140,6 +164,8 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
 </head>
 <body>
 
+<video id="cam" playsinline muted autoplay hidden></video>
+<div id="scrim" hidden></div>
 <div id="stage">
   <div id="veil"><div id="script" aria-live="off"></div></div>
   <div id="line"><span></span></div>
@@ -157,6 +183,7 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
   <button id="bFind">Find me</button>
   <button id="bBack">&#8593; Back</button>
   <button id="bFwd">&#8595; Fwd</button>
+  <button id="bRec">Record</button>
   <button id="bScript">Script</button>
   <button id="bSet">Setup</button>
 </div>
@@ -254,6 +281,21 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
       <span class="note">Lower holds position until it is sure. Higher follows faster but
       may jump on repeated words.</span></label>
     <hr>
+    <label class="row">Camera &amp; recording</label>
+    <div class="btnrow">
+      <button id="bCam" aria-pressed="false">Turn camera on</button>
+      <button id="bFlip">Front / back</button>
+    </div>
+    <label class="row"><span class="rowhead">Text backing <span class="val" id="vScrimv"></span></span>
+      <input type="range" id="scrimv" min="0" max="90" step="1"></label>
+    <p class="note">The camera fills the screen with the script over it, so you
+    read down the lens. Recording happens in this page, which is the only way
+    one device can record and follow your voice at once &mdash; two separate apps
+    cannot, because Android gives the microphone to one of them and silences the
+    other. If tracking stops the moment recording starts, this browser will not
+    do both: use <b>Start timed roll</b> or the remote to move the script, and
+    the recording is unaffected.</p>
+    <hr>
     <label class="row"><span class="rowhead">Remote control <span class="val" id="vLink">off</span></span>
       <input type="text" id="room" placeholder="pair code" autocomplete="off"
              autocapitalize="characters" spellcheck="false" maxlength="8"></label>
@@ -282,14 +324,26 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
     <code>&#8593;</code> back a line · <code>M</code> mirror · <code>F</code> fullscreen ·
     <code>Esc</code> show the bar.</p>
     <hr>
-    <p class="note"><b>This page never records.</b> It has no camera and saves no
-    video or audio anywhere. When your browser shows a microphone or recording
-    indicator on this tab, that is the prompter listening so it can follow your
-    place &mdash; nothing is being captured or kept. Record with a separate
-    camera, phone or tablet.</p>
+    <p class="note"><b>Nothing leaves this device.</b> Takes are written here and
+    stay here until you save or share them; no upload, no account, no server.
+    A microphone indicator on the tab with the camera off means the prompter is
+    listening to follow your place, not recording. A take only exists while the
+    red counter is showing, and is only kept once you tap <b>Share / save</b> or
+    <b>Download</b>.</p>
     <p class="note" id="diag"></p>
   </div>
 </section>
+
+<div id="rec" hidden><i></i><span id="recTime">0:00</span><span id="recSize"></span></div>
+
+<div id="take" hidden>
+  <span class="lbl">Take ready &mdash; <span id="takeInfo"></span></span>
+  <div class="btnrow">
+    <button id="bShareTake" class="primary">Share / save</button>
+    <button id="bSaveTake">Download</button>
+    <button id="bDropTake" class="danger">Discard</button>
+  </div>
+</div>
 
 <div id="toast"></div>
 <div id="confirm"><div class="box">
@@ -324,7 +378,7 @@ var SAMPLE =
 var S = {                        // persisted settings
   size:52, lead:1.45, width:76, lineY:38, sens:3, speed:18, band:0,
   mirrorX:false, mirrorY:false, lang:"en-US", keep:false, text:SAMPLE, slot:"",
-  room:"", share:true
+  room:"", share:true, camOn:false, facing:"user", scrim:62
 };
 var toks = [];                   // [{norm, el, cue}]
 var cursor = 0;                  // index of the next word expected
@@ -833,6 +887,200 @@ function reflectMic(){
 }
 
 /* ------------------------------------------------------------------ *
+ *  Camera and recording
+ *
+ *  One getUserMedia stream feeds the recorder. Speech recognition opens its
+ *  own capture and in some builds of Chrome is starved when the page is also
+ *  capturing -- a long-standing Chromium issue. That cannot be fixed from
+ *  here, so instead it is DETECTED: the recorder's own audio tells us whether
+ *  you are actually speaking, and if you plainly are while recognition hears
+ *  nothing, the page says so rather than leaving you to wonder.
+ * ------------------------------------------------------------------ */
+var cam = {stream:null, mr:null, chunks:[], bytes:0, startAt:0, tick:null,
+           blob:null, ext:"webm", level:0, actx:null, an:null, raf:0, loud:0};
+
+function pickType(){
+  var want = ["video/mp4;codecs=h264,aac", "video/mp4",
+              "video/webm;codecs=vp8,opus", "video/webm"];
+  for(var i=0;i<want.length;i++){
+    try{ if(window.MediaRecorder && MediaRecorder.isTypeSupported(want[i])) return want[i]; }catch(e){}
+  }
+  return "";
+}
+
+function camOn(next){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    toast("This browser cannot open the camera."); return;
+  }
+  var want = {
+    audio:true,
+    video:{ facingMode: S.facing, width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} }
+  };
+  setState("Opening the camera");
+  navigator.mediaDevices.getUserMedia(want).then(function(st){
+    cam.stream = st;
+    var v = $("cam");
+    v.srcObject = st; v.hidden = false; v.classList.toggle("selfie", S.facing === "user");
+    $("scrim").hidden = false;
+    document.body.classList.add("cam-on");
+    S.camOn = true; saveSettings();
+    $("bCam").textContent = "Turn camera off";
+    $("bCam").setAttribute("aria-pressed","true");
+    meterStart(st);
+    setState(listening ? "Listening" : "Idle");
+    if(next) next();
+  }).catch(function(e){
+    setState("Camera refused");
+    toast("The camera was refused. Allow it for this site, and close any other app using it.");
+  });
+}
+
+function camOff(){
+  if(cam.mr && cam.mr.state !== "inactive"){ toast("Stop recording first."); return; }
+  meterStop();
+  if(cam.stream){ cam.stream.getTracks().forEach(function(t){ t.stop(); }); }
+  cam.stream = null;
+  var v = $("cam"); v.srcObject = null; v.hidden = true;
+  $("scrim").hidden = true;
+  document.body.classList.remove("cam-on");
+  S.camOn = false; saveSettings();
+  $("bCam").textContent = "Turn camera on";
+  $("bCam").setAttribute("aria-pressed","false");
+}
+
+/* A level meter on the recorder's own stream. This is what lets the page tell
+   "the room is quiet" apart from "recognition is being starved". */
+function meterStart(st){
+  try{
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return;
+    cam.actx = new AC();
+    var src = cam.actx.createMediaStreamSource(st);
+    cam.an = cam.actx.createAnalyser();
+    cam.an.fftSize = 512;
+    src.connect(cam.an);
+    var buf = new Uint8Array(cam.an.frequencyBinCount);
+    var loop = function(){
+      if(!cam.an) return;
+      cam.an.getByteFrequencyData(buf);
+      var sum = 0;
+      for(var i=0;i<buf.length;i++) sum += buf[i];
+      cam.level = sum / buf.length;
+      if(cam.level > 12) cam.loud = Date.now();
+      cam.raf = requestAnimationFrame(loop);
+    };
+    loop();
+  }catch(e){}
+}
+function meterStop(){
+  if(cam.raf) cancelAnimationFrame(cam.raf);
+  cam.raf = 0; cam.an = null;
+  if(cam.actx){ try{ cam.actx.close(); }catch(e){} cam.actx = null; }
+}
+
+function recStart(){
+  if(!window.MediaRecorder){ toast("This browser cannot record."); return; }
+  if(!cam.stream){ return camOn(recStart); }
+  var type = pickType();
+  var opt = type ? {mimeType:type, videoBitsPerSecond:4000000} : {videoBitsPerSecond:4000000};
+  try{ cam.mr = new MediaRecorder(cam.stream, opt); }
+  catch(e){ try{ cam.mr = new MediaRecorder(cam.stream); }catch(e2){ toast("Recording could not start."); return; } }
+  cam.ext = (cam.mr.mimeType || type || "").indexOf("mp4") >= 0 ? "mp4" : "webm";
+  cam.chunks = []; cam.bytes = 0; cam.blob = null;
+  $("take").hidden = true;
+
+  cam.mr.ondataavailable = function(ev){
+    if(ev.data && ev.data.size){ cam.chunks.push(ev.data); cam.bytes += ev.data.size; }
+  };
+  cam.mr.onstop = function(){
+    var blob = new Blob(cam.chunks, {type: cam.mr.mimeType || "video/webm"});
+    cam.blob = blob; cam.chunks = [];
+    $("takeInfo").textContent = fmtTime(Math.round((Date.now()-cam.startAt)/1000))
+                              + "  \u00b7  " + mb(blob.size) + "  \u00b7  ." + cam.ext;
+    $("take").hidden = false;
+    showBar(true);
+  };
+  cam.mr.onerror = function(){ toast("Recording stopped with an error."); recStop(); };
+
+  cam.mr.start(2000);                 // flush every 2s so a crash costs little
+  cam.startAt = Date.now();
+  noSpeechRun = 0; recWarned = false;
+  $("rec").hidden = false;
+  $("bRec").textContent = "Stop rec";
+  $("bRec").classList.add("primary");
+  cam.tick = setInterval(recTick, 500);
+  publishState(true);
+  toast("Recording. Nothing is uploaded \u2014 the take stays on this device.");
+}
+
+function recStop(){
+  clearInterval(cam.tick); cam.tick = null;
+  if(cam.mr && cam.mr.state !== "inactive"){ try{ cam.mr.stop(); }catch(e){} }
+  $("rec").hidden = true;
+  $("bRec").textContent = "Record";
+  $("bRec").classList.remove("primary");
+  publishState(true);
+}
+
+var recWarned = false;
+function recTick(){
+  var secs = Math.round((Date.now() - cam.startAt)/1000);
+  $("recTime").textContent = fmtTime(secs);
+  $("recSize").textContent = "\u00b7 " + mb(cam.bytes);
+
+  /* The conflict tell: the recorder is hearing you clearly, recognition is
+     not hearing anything at all. */
+  if(listening && !recWarned && secs > 10){
+    var speakingNow = Date.now() - cam.loud < 2500;
+    var deaf = Date.now() - lastMatchAt > 9000;
+    if(speakingNow && deaf){
+      recWarned = true;
+      setState("Recording, but not following your voice");
+      toast("Your voice is reaching the recording but not the tracker. This browser will not do both \u2014 use the timed roll or the remote to scroll.");
+    }
+  }
+  if(secs === 600) toast("Ten minutes. Long takes are held in memory \u2014 consider stopping and starting a new one.");
+}
+
+function fmtTime(s){
+  var m = Math.floor(s/60);
+  return m + ":" + String(s % 60).padStart(2,"0");
+}
+function mb(b){
+  return b > 1048576 ? (b/1048576).toFixed(0) + " MB" : Math.round(b/1024) + " KB";
+}
+
+function takeName(){
+  var d = new Date(), z = function(n){ return String(n).padStart(2,"0"); };
+  return "take-" + d.getFullYear() + z(d.getMonth()+1) + z(d.getDate())
+       + "-" + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds()) + "." + cam.ext;
+}
+
+function saveTake(){
+  if(!cam.blob) return;
+  var url = URL.createObjectURL(cam.blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = takeName();
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 20000);
+  toast("Saved to your Downloads.");
+}
+
+function shareTake(){
+  if(!cam.blob) return;
+  var f;
+  try{ f = new File([cam.blob], takeName(), {type: cam.blob.type}); }
+  catch(e){ return saveTake(); }
+  if(navigator.canShare && navigator.canShare({files:[f]}) && navigator.share){
+    navigator.share({files:[f], title:"Teleprompter take"})
+      .then(function(){ toast("Sent."); })
+      .catch(function(){});
+  } else {
+    saveTake();
+  }
+}
+
+/* ------------------------------------------------------------------ *
  *  Remote control link
  *
  *  Two browsers cannot talk to each other directly, so commands go through
@@ -928,6 +1176,7 @@ function handleCommand(o){
   else if(c === "top"){ cursor = firstReal(0); lastMatchAt = Date.now(); paint(); jumpToCursor(true); }
   else if(c === "find") findMe();
   else if(c === "roll") $("bRoll").click();
+  else if(c === "rec"){ (cam.mr && cam.mr.state === "recording") ? recStop() : recStart(); }
   else return;
   publishState(true);
 }
@@ -967,6 +1216,9 @@ function publishState(force){
   var msg = {
     i: cursor, n: toks.length,
     l: listening ? 1 : 0, r: rolling ? 1 : 0,
+    v: (cam.mr && cam.mr.state === "recording") ? 1 : 0,
+    t: cam.startAt && cam.mr && cam.mr.state === "recording"
+       ? fmtTime(Math.round((Date.now()-cam.startAt)/1000)) : "",
     s: $("state").textContent,
     h: heardFinal.concat(heardInterim).slice(-7).join(" "),
     w: snippet
@@ -1218,6 +1470,31 @@ $("bDelete").addEventListener("click", function(){
       });
 });
 
+bindRange("scrimv","scrim", function(v){ return v + "%"; });
+$("scrimv").addEventListener("input", function(){
+  $("scrim").style.background = "rgba(8,10,12," + (S.scrim/100) + ")";
+});
+$("scrim").style.background = "rgba(8,10,12," + (S.scrim/100) + ")";
+
+$("bCam").addEventListener("click", function(){ S.camOn ? camOff() : camOn(); });
+$("bFlip").addEventListener("click", function(){
+  S.facing = S.facing === "user" ? "environment" : "user";
+  saveSettings();
+  if(S.camOn){ var was = cam.mr && cam.mr.state === "recording";
+               if(was){ toast("Stop recording before switching camera."); S.facing = S.facing === "user" ? "environment" : "user"; return; }
+               camOff(); camOn(); }
+  else toast(S.facing === "user" ? "Front camera selected." : "Back camera selected.");
+});
+$("bRec").addEventListener("click", function(){
+  (cam.mr && cam.mr.state === "recording") ? recStop() : recStart();
+});
+$("bSaveTake").addEventListener("click", function(){ saveTake(); });
+$("bShareTake").addEventListener("click", function(){ shareTake(); });
+$("bDropTake").addEventListener("click", function(){
+  ask("Discard this take? It has not been saved anywhere, so it will be gone.",
+      function(){ cam.blob = null; $("take").hidden = true; toast("Discarded."); });
+});
+
 $("room").value = S.room || "";
 $("bShare").setAttribute("aria-pressed", S.share ? "true" : "false");
 $("bShare").addEventListener("click", function(){
@@ -1301,12 +1578,16 @@ function diag(){
   var probe = "no";
   try{ localStorage.setItem("vftp.probe","1"); localStorage.removeItem("vftp.probe"); probe = "yes"; }catch(e){}
   bits.push("<b>Settings can be saved:</b> " + probe + (storageOK ? "" : " (a save was refused)"));
+  bits.push("<b>Can record:</b> " + (window.MediaRecorder ? ("yes, as " + (pickType() || "the browser default")) : "no"));
   bits.push("<b>Remote library:</b> " + (window.mqtt ? "loaded" : "did NOT load"));
   bits.push("<b>Remote link:</b> " + (link.on ? "connected as " + link.room : "not connected"));
   $("diag").innerHTML = bits.join("<br>");
 }
 
 refreshSetups();
+S.camOn = false;                       // the camera is only ever opened by a tap
+$("bCam").textContent = "Turn camera on";
+$("bCam").setAttribute("aria-pressed","false");
 if(S.keep) keepAwake(true);
 $("bKeep").setAttribute("aria-pressed", S.keep ? "true" : "false");
 showBar(true);
