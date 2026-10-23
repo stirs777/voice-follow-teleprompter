@@ -11,6 +11,24 @@ On first run Chrome asks for microphone access — say yes, and choose *Allow
 every time* so it stops asking. If the prompt does not appear, tap the padlock
 in the address bar and allow the microphone there, then reload.
 
+## First run
+
+It asks how you are filming, and sets itself up from the answer: text size,
+column width, where the reading line sits, whether the image is mirrored, and
+whether this device is also the camera. The four arrangements are named by the
+equipment they need rather than by the settings they change, so you can match
+the list against what is actually on the desk in front of you:
+
+| | What it needs | What it does |
+|---|---|---|
+| **Optical teleprompter rig** | A separate camera, beam-splitter glass, this tablet under it | Big text full width, **mirrored**, because the glass flips it back |
+| **Two devices, no glass** | Something to film with, this tablet beside it | Narrow column high on screen, not mirrored |
+| **Just this one device** | Nothing else | This device is the camera, script over the picture, records the take |
+| **A laptop and its webcam** | A laptop, filming with something else | Narrow column at the top of the display |
+
+Change any of it afterwards in Setup, or come back to the chooser from
+**Setup → Choose your rig**.
+
 ## How the tracking works
 
 It anchors on the most recent word it heard, finds that word in the script

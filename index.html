@@ -149,6 +149,12 @@ select,input[type=text]{font-family:var(--ui-face);font-size:13px}
 .note code{color:var(--amber);font-size:11px}
 hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
 .danger{color:var(--warn);border-color:var(--warn)}
+.rig{display:flex;flex-direction:column;gap:5px;align-items:flex-start;
+  text-align:left;padding:15px;min-height:0}
+.rig b{font-size:13px;letter-spacing:.04em;color:var(--ink);font-weight:600}
+.rig .need{font-size:11px;line-height:1.55;color:var(--amber);letter-spacing:.02em}
+.rig .what{font-size:11.5px;line-height:1.6;color:var(--ink-dim);letter-spacing:.01em;
+  font-family:var(--prompt-face)}
 #toast{position:fixed;left:50%;bottom:calc(74px + env(safe-area-inset-bottom,0px));
   transform:translate(-50%,14px);z-index:12;background:var(--panel-2);border:1px solid var(--edge);
   border-radius:10px;padding:10px 16px;font-size:12px;letter-spacing:.05em;
@@ -221,6 +227,52 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
   </div>
 </section>
 
+<!-- ============ RIG CHOOSER ============ -->
+<section class="panel" id="pRig" aria-hidden="true">
+  <header>
+    <h2>How are you filming?</h2>
+    <button data-close="pRig">Close</button>
+  </header>
+  <div class="body">
+    <p class="note">Pick the one that matches what you have in front of you. It
+    sets the text size, the column width, where the reading line sits, and
+    whether the image is mirrored. You can change any of it afterwards, and
+    come back here from Setup at any time.</p>
+
+    <button class="rig" data-rig="glass">
+      <b>Optical teleprompter rig</b>
+      <span class="need">A separate camera + beam-splitter glass + this tablet mounted under it</span>
+      <span class="what">Big text across the full width, and mirrored, because the
+      glass flips it back the right way round. You record on your camera as usual.</span>
+    </button>
+
+    <button class="rig" data-rig="two">
+      <b>Two devices, no glass</b>
+      <span class="need">A phone or camera to film with, and this tablet beside it</span>
+      <span class="what">A narrow column high on the screen, so your eyes stay close
+      to the lens. Nothing is mirrored. You record on the other device.</span>
+    </button>
+
+    <button class="rig" data-rig="one">
+      <b>Just this one device</b>
+      <span class="need">Nothing else at all</span>
+      <span class="what">This device becomes the camera, with the script over the
+      picture, and records the take itself. The only arrangement where one device
+      can film and follow your voice at the same time.</span>
+    </button>
+
+    <button class="rig" data-rig="laptop">
+      <b>A laptop and its built-in webcam</b>
+      <span class="need">A laptop, filming with something else</span>
+      <span class="what">A narrow column at the top of the display, just under the
+      lens, showing a few lines at a time.</span>
+    </button>
+
+    <p class="note">Not sure? <b>Just this one device</b> is the one that needs
+    nothing you do not already have.</p>
+  </div>
+</section>
+
 <!-- ============ SETUP PANEL ============ -->
 <section class="panel" id="pSet" aria-hidden="true">
   <header>
@@ -228,6 +280,9 @@ hr{border:0;border-top:1px solid var(--edge);margin:2px 0}
     <button data-close="pSet">Done</button>
   </header>
   <div class="body">
+    <div class="btnrow">
+      <button id="bRig" class="primary">Choose your rig</button>
+    </div>
     <label class="row">Framing preset</label>
     <div class="btnrow">
       <button id="bPreTab">Tablet &mdash; full screen</button>
@@ -1373,6 +1428,40 @@ $("bLookDel").addEventListener("click", function(){
       function(){ delete all[n]; if(putSetups(all)){ refreshSetups(); toast("Deleted."); } });
 });
 
+/* Four arrangements, four quite different shapes. Rather than assume one, ask
+   once -- and ask in terms of equipment someone can see on the desk, not in
+   terms of settings they would have to understand first. */
+var RIGS = {
+  glass:  { look:{size:64, lead:1.52, width:90, lineY:42, band:0, mirrorX:true,  mirrorY:false},
+            cam:false,
+            tip:"Mirroring is on, because the glass flips it back. Mount the tablet under the glass and record on your camera." },
+  two:    { look:{size:44, lead:1.5,  width:62, lineY:18, band:7, mirrorX:false, mirrorY:false},
+            cam:false,
+            tip:"Stand the other device just above this one and record there. Nothing is mirrored." },
+  one:    { look:{size:34, lead:1.5,  width:72, lineY:16, band:5, mirrorX:false, mirrorY:false},
+            cam:true,
+            tip:"Tap Record on the bar when you are ready. The take stays on this device until you save it." },
+  laptop: { look:{size:34, lead:1.5,  width:44, lineY:12, band:5, mirrorX:false, mirrorY:false},
+            cam:false,
+            tip:"Film with something else; this screen is only the script." }
+};
+
+function chooseRig(name){
+  var r = RIGS[name];
+  if(!r) return;
+  applyLook(r.look);
+  closePanel("pRig");
+  showBar(false);
+  if(r.cam && !S.camOn){ camOn(); }       // still inside the tap, so the prompt is expected
+  else if(!r.cam && S.camOn){ camOff(); }
+  toast(r.tip);
+}
+
+Array.prototype.forEach.call(document.querySelectorAll("[data-rig]"), function(b){
+  b.addEventListener("click", function(){ chooseRig(b.dataset.rig); });
+});
+$("bRig").addEventListener("click", function(){ openPanel("pRig"); });
+
 $("bPreTab").addEventListener("click", function(){
   applyPreset({size:52, lead:1.45, width:76, lineY:38, band:0});
   toast("Full-screen framing.");
@@ -1585,6 +1674,10 @@ function diag(){
 }
 
 refreshSetups();
+/* Nobody has configured anything yet, so ask before they have to guess. */
+var everRun = false;
+try{ everRun = !!localStorage.getItem(SET_KEY); }catch(e){}
+if(!everRun) setTimeout(function(){ openPanel("pRig"); }, 450);
 S.camOn = false;                       // the camera is only ever opened by a tap
 $("bCam").textContent = "Turn camera on";
 $("bCam").setAttribute("aria-pressed","false");
